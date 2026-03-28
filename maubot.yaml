@@ -26,14 +26,14 @@ maubot: 0.4.0
 id: de.maubot.url_filter_bot
 
 name: URL Filter Bot
-version: 2.0.0
+version: 2.1.0
 license: AGPL-3.0-or-later
 description: >
-  Scannt Matrix-Raumnachrichten auf URLs und prüft diese gegen konfigurierbare
+  Scannt Matrix-Raumnachrichten auf URLs und prueft diese gegen konfigurierbare
   Blacklists im Hostfile-Format. Unbekannte Domains werden in einen
-  Moderationsraum weitergeleitet, wo per Emoji-Reaktion (✅/❌) oder Befehl
-  entschieden werden kann. Unterstützt Wildcards (*.domain.com) und erkennt
-  auch nackte Domains ohne http://-Präfix.
+  Moderationsraum weitergeleitet, wo per Emoji-Reaktion oder Befehl
+  entschieden werden kann. Unterstuetzt Wildcards (*.domain.com) und erkennt
+  auch nackte Domains ohne http://-Praefix.
 
 author:
   - Kori <korinator21@gmail.com>
@@ -52,4 +52,5 @@ config: true
 # The bot appends to these at runtime when mods approve/block domains.
 extra_files:
   - blacklists/custom.txt
-  - whitelis
+  - whitelists/custom.txt
+  - base-config.yaml

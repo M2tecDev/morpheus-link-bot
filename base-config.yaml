@@ -1,5 +1,5 @@
 # =============================================================================
-# base-config.yaml — Standardkonfiguration (v2)
+# base-config.yaml — Standardkonfiguration (v2.1)
 # =============================================================================
 #
 # Diese Standardwerte können nach dem Erstellen einer Instanz im Maubot-Dashboard
@@ -34,10 +34,10 @@ whitelist_dir: /data/whitelists/
 # -----------------------------------------------------------------------------
 
 # Vollständige Matrix-Raum-ID des Moderations-/Admin-Raums.
-# Unbekannte URLs werden hierhin als Überprüfungsanfragen mit ✅/❌-Reaktionsknöpfen
+# Unbekannte URLs werden hierhin als Überprüfungsanfragen mit Emoji-Reaktionsknöpfen
 # weitergeleitet. Der Bot muss Mitglied dieses Raums mit mindestens
 # "Nachrichten senden"-Rechten sein.
-mod_room_id: "!DzRpAroBgyJ2JzMptj9aNEdfCqNkzpPwzaSz_c7U0LE"
+mod_room_id: "ROOM_ID"
 
 
 # -----------------------------------------------------------------------------
@@ -84,3 +84,25 @@ min_domain_length: 4
 
 # Maximale Domain-String-Länge beim Parsen (übergroße Müllzeilen überspringen).
 max_domain_length: 253
+
+
+# -----------------------------------------------------------------------------
+# SPAM-SCHUTZ
+# -----------------------------------------------------------------------------
+
+# Warn-Cooldown (Sekunden): Wie lange der Bot nach einer Warnmeldung wartet, bevor er
+# für denselben Nutzer eine neue Warnung im Raum postet. Nachrichten werden weiterhin
+# sofort gelöscht — nur die Benachrichtigung wird gedrosselt, um Notification Flooding
+# zu vermeiden.
+warn_cooldown: 60
+
+# Automatisches Stummschalten aktivieren (true/false).
+# Wenn true, wird ein Nutzer stummgeschaltet (Powerlevel -1), sobald er den
+# mute_threshold innerhalb von 5 Minuten erreicht.
+#
+# Hinweis: Der Bot benötigt ein höheres Powerlevel als der Zielnutzer
+# (üblicherweise 50 oder 100), um dessen Berechtigungen ändern zu können.
+mute_enabled: false
+
+# Anzahl der Verstöße innerhalb von 5 Minuten, die eine automatische Stummschaltung auslösen.
+mute_threshold: 5

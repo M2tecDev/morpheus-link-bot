@@ -1,5 +1,5 @@
 """
-URL-Filter-Bot — Hochleistungsedition  (v2)
+URL-Filter-Bot — Hochleistungsedition  (v2.1)
 ============================================
 
 Designziele
@@ -242,6 +242,9 @@ class Config(BaseProxyConfig):
         helper.copy("loader_threads")
         helper.copy("min_domain_length")
         helper.copy("max_domain_length")
+        helper.copy("warn_cooldown")
+        helper.copy("mute_enabled")
+        helper.copy("mute_threshold")
 
 
 # ===========================================================================
@@ -298,6 +301,14 @@ class URLFilterBot(Plugin):
       _seen_events_q    — Deque-Spiegel von _seen_events für FIFO-Verdrängung
       _file_lock        — asyncio.Lock für Datei-Schreibzugriffe
       _loader_pool      — ThreadPoolExecutor für Parser-Threads
+      _warn_cooldowns   — Dict[sender, monotonic-Zeitstempel der letzten Warnung]
+                          Verhindert Notification Flooding: Warnungen werden pro
+                          Nutzer höchstens einmal pro `warn_cooldown` Sekunden gepostet.
+                          Nachrichten werden weiterhin sofort gelöscht.
+      _violation_counts — Dict[sender, List[monotonic-Zeitstempel]]
+                          Zählt Verstöße innerhalb eines 5-Minuten-Fensters.
+                          Auslöser für automatisches Stummschalten bei Überschreitung
+                          von `mute_threshold`.
     """
 
     # Maximale Anzahl zu merkender Event-IDs für die Deduplizierung.
@@ -355,6 +366,14 @@ class URLFilterBot(Plugin):
 
         # Lock zur Serialisierung von custom.txt-Anhängen (siehe SELBSTAUDIT §2-C)
         self._file_lock: asyncio.Lock = asyncio.Lock()
+
+        # Spam-Schutz: letzte Warn-Zeitstempel pro Nutzer (monotonic).
+        # Verhindert, dass der Bot bei Link-Spam den Raum mit Warnmeldungen flutet.
+        self._warn_cooldowns: Dict[str, float] = {}
+
+        # Spam-Schutz: Liste der Verstoß-Zeitstempel pro Nutzer (monotonic).
+        # Einträge älter als 5 Minuten werden bei jedem Zugriff bereinigt.
+        self._violation_counts: Dict[str, List[float]] = {}
 
         # Dedizierter ThreadPoolExecutor, damit Datei-E/A nicht mit aiohttp
         # um den Standard-Executor konkurriert
@@ -906,25 +925,35 @@ class URLFilterBot(Plugin):
     ) -> bool:
         """
         Behandelt Nachrichten mit mindestens einer gesperrten Domain.
-        Löscht die Nachricht und sendet eine Warnung, die alle gesperrten Domains nennt.
+        Löscht die Nachricht immer sofort. Eine Warnmeldung im Raum wird nur
+        gepostet, wenn der Warn-Cooldown für diesen Nutzer abgelaufen ist
+        (verhindert Notification Flooding bei Link-Spam). Ist Mute aktiviert
+        und der Schwellenwert erreicht, wird der Nutzer stummgeschaltet.
         Gibt True zurück, wenn das Löschen erfolgreich war.
         """
+        # Nachricht immer sofort löschen — unabhängig vom Warn-Cooldown.
         # HINWEIS: Der Löschgrund ist nur in den Maubot-/Homeserver-Logs sichtbar —
         # er wird in keinem Standard-Matrix-Client den Raummitgliedern angezeigt.
         redacted = await self._redact(
             evt.room_id, evt.event_id,
             reason=f"Gesperrte Domain(s): {', '.join(domains[:3])}",
         )
+
+        # Warn-Cooldown prüfen — Warnmeldung nur einmal pro Cooldown-Intervall posten.
         # SICHERHEIT: Die Domain-Namen NICHT an Raummitglieder weitergeben.
-        # Das Offenlegen, welche Domain den Block ausgelöst hat, ermöglicht
-        # Angreifern, trivial auf eine noch nicht gelistete Domain auszuweichen.
-        # Moderatoren können die vollständige Domain in den Maubot-Logs über
-        # den obigen Löschgrund einsehen.
-        await self._send_notice(
-            evt.room_id,
-            f"⚠️ {evt.sender}: Deine Nachricht wurde entfernt, da sie einen gesperrten Link enthielt. "
-            f"Wende dich an einen Moderator, wenn du glaubst, dass dies ein Fehler ist.",
-        )
+        now = time.monotonic()
+        cooldown = float(self.config.get("warn_cooldown", 60))
+        if now - self._warn_cooldowns.get(evt.sender, 0.0) >= cooldown:
+            self._warn_cooldowns[evt.sender] = now
+            await self._send_notice(
+                evt.room_id,
+                f"⚠️ {evt.sender}: Deine Nachricht wurde entfernt, da sie einen gesperrten Link enthielt. "
+                f"Wende dich an einen Moderator, wenn du glaubst, dass dies ein Fehler ist.",
+            )
+
+        # Verstoß erfassen und ggf. stummschalten.
+        await self._handle_violation(evt.sender, evt.room_id)
+
         return redacted
 
     async def _handle_unknown(
@@ -932,23 +961,111 @@ class URLFilterBot(Plugin):
     ) -> bool:
         """
         Behandelt Nachrichten mit unbekannten (nicht gelisteten) Domains.
-        Löscht die Nachricht, benachrichtigt den Nutzer und reicht jede Domain
-        als separate Überprüfungsanfrage an den Mod-Raum ein.
+        Löscht die Nachricht immer sofort. Eine Nutzermeldung wird nur gepostet,
+        wenn der Warn-Cooldown abgelaufen ist. Jede Domain wird einzeln an den
+        Mod-Raum zur Überprüfung weitergeleitet. Ist Mute aktiviert und der
+        Schwellenwert erreicht, wird der Nutzer stummgeschaltet.
         Gibt True zurück, wenn das Löschen erfolgreich war.
         """
         redacted = await self._redact(
             evt.room_id, evt.event_id,
             reason="Unbekannte Domain(s) — ausstehende Moderatorenüberprüfung",
         )
-        await self._send_notice(
-            evt.room_id,
-            f"🔍 {evt.sender}: Deine Nachricht mit einem unbekannten Link wurde entfernt "
-            f"und zur Überprüfung an die Moderatoren weitergeleitet. "
-            f"Du wirst benachrichtigt, sobald eine Entscheidung getroffen wurde.",
-        )
+
+        # Warn-Cooldown prüfen.
+        now = time.monotonic()
+        cooldown = float(self.config.get("warn_cooldown", 60))
+        if now - self._warn_cooldowns.get(evt.sender, 0.0) >= cooldown:
+            self._warn_cooldowns[evt.sender] = now
+            await self._send_notice(
+                evt.room_id,
+                f"🔍 {evt.sender}: Deine Nachricht mit einem unbekannten Link wurde entfernt "
+                f"und zur Überprüfung an die Moderatoren weitergeleitet. "
+                f"Du wirst benachrichtigt, sobald eine Entscheidung getroffen wurde.",
+            )
+
         for domain in domains:
             await self._submit_for_review(domain, evt)
+
+        # Verstoß erfassen und ggf. stummschalten.
+        await self._handle_violation(evt.sender, evt.room_id)
+
         return redacted
+
+    def _record_violation(self, sender: str) -> bool:
+        """
+        Trägt einen neuen Verstoß für `sender` ein und gibt True zurück,
+        wenn der konfigurierte `mute_threshold` innerhalb des letzten
+        5-Minuten-Fensters erreicht oder überschritten wurde.
+
+        Einträge außerhalb des Fensters werden bei jedem Aufruf bereinigt,
+        sodass der Dict-Eintrag nie unbegrenzt wächst.
+        """
+        threshold: int = int(self.config.get("mute_threshold", 5))
+        now = time.monotonic()
+        window = 300.0  # 5-Minuten-Beobachtungsfenster (fest)
+
+        timestamps = self._violation_counts.setdefault(sender, [])
+        # Alle Einträge, die älter als das Fenster sind, verwerfen.
+        cutoff = now - window
+        while timestamps and timestamps[0] < cutoff:
+            timestamps.pop(0)
+        timestamps.append(now)
+        return len(timestamps) >= threshold
+
+    async def _handle_violation(self, sender: str, room_id: RoomID) -> None:
+        """
+        Zentraler Aufrufer nach jedem Verstoß: Erfasst den Verstoß und
+        schaltet den Nutzer stummgeschaltet, wenn Mute aktiviert ist und
+        der Schwellenwert erreicht wurde.
+        """
+        if not self.config.get("mute_enabled", False):
+            return
+        if self._record_violation(sender):
+            muted = await self._mute_user(sender, room_id)
+            if muted:
+                await self._send_notice(
+                    room_id,
+                    f"🔇 {sender} wurde wegen wiederholter Regelverstöße stummgeschaltet.",
+                )
+
+    async def _mute_user(self, user_id: str, room_id: RoomID) -> bool:
+        """
+        Setzt das Powerlevel von `user_id` im Raum auf -1 (stummgeschaltet).
+
+        Ablauf:
+          1. Aktuellen Power-Level-State-Event abrufen.
+          2. Eintrag des Nutzers auf -1 setzen.
+          3. State-Event zurückschreiben.
+
+        Gibt True bei Erfolg zurück, False bei Fehler (vollständiger Traceback
+        landet im Maubot-Log). Schlägt fehl, wenn der Bot kein ausreichendes
+        Powerlevel hat, um die Berechtigungen des Zielnutzers zu ändern.
+        """
+        try:
+            pl_content = await self.client.get_state_event(
+                room_id, EventType.ROOM_POWER_LEVELS
+            )
+            users: dict = pl_content.get("users", {})
+            if users.get(user_id) == -1:
+                # Bereits stummgeschaltet — kein doppelter State-Event nötig.
+                return True
+            users[user_id] = -1
+            pl_content["users"] = users
+            await self.client.send_state_event(
+                room_id, EventType.ROOM_POWER_LEVELS, pl_content
+            )
+            self.log.info(
+                "Nutzer %s in Raum %s stummgeschaltet (Powerlevel -1).", user_id, room_id
+            )
+            return True
+        except Exception:
+            self.log.exception(
+                "Stummschalten von %s in %s fehlgeschlagen — "
+                "prüfen ob der Bot ein höheres Powerlevel als der Zielnutzer hat.",
+                user_id, room_id,
+            )
+            return False
 
     async def _post_link_preview(
         self, domain: str, url: str, room_id: RoomID
@@ -2143,136 +2260,3 @@ def _md_to_html(text: str) -> str:
     )
 
     return text
-
-
-# ===========================================================================
-# ABSCHNITT 21 — SELBSTAUDIT
-# ===========================================================================
-#
-# ╔═════════════════════════════════════════════════════════════════════════╗
-# ║  SELBSTAUDIT: Speicher · Threadsicherheit · Fehlerbehandlung · ReDoS   ║
-# ╚═════════════════════════════════════════════════════════════════════════╝
-#
-# ── §1  SPEICHERBEDARF ─────────────────────────────────────────────────────
-#
-#  Eingabekorpus: 6.500.000 eindeutige Domain-Strings (13 Dateien × ca. 500 K).
-#  Speicherstruktur: Python set (offene Adressierung, 2/3 Auslastungsfaktor).
-#
-#  Kosten pro Eintrag (CPython 3.11, 64-Bit Linux):
-#    str-Objekt-Header:      49 Byte  (jeder Python-str, längenunabhängig)
-#    String-Inhalt (ASCII): ~20 Byte (typische Domain z.B. "sub.example.com")
-#    Hash-Tabellen-Slot:      8 Byte  (Zeiger) × 1,5 (Auslastungsfaktor-Overhead)
-#    ─────────────────────────────────────────────────────────────────────────
-#    Pro Domain (ca.):  ~89 Byte
-#
-#  Gesamt:
-#    6.500.000 × 89 Byte  ≈ 579 MB  (theoretisches Minimum)
-#    + Python-Allokator-Overhead (~15-20%)
-#    ─────────────────────────────────────────────────────────────────────────
-#    Realistischer Steady-State-RAM: 680 MB – 1,05 GB
-#
-#  Während des parallelen Ladens (13 Pro-Datei-Sets gleichzeitig vor Zusammenführung):
-#    Peak ≈ finales Set-RAM + 12 × (kleinste verbleibende nicht zusammengeführte Sets)
-#    Schlimmster Fall: ~1,05 GB + ~90 MB = ~1,15 GB  (kurz, GC gibt schnell frei)
-#
-#  ABHILFEMASSNAHMEN bei RAM-Knappheit:
-#    a) BloomFilter (pybloom-live): 7,4 MB für 6,5 Mio. Einträge bei 0,1% Falschpositivrate.
-#       Kompromiss: ~1/1000 unbekannte URLs erscheinen möglicherweise fälschlich als "bekannt".
-#    b) Nur die Hochrisiko-Listen laden (Malware, Phishing, Ransomware).
-#    c) Auf einem Server mit ≥ 2 GB RAM ausführen (dringend empfohlen).
-#
-# ── §2  THREADSICHERHEIT ───────────────────────────────────────────────────
-#
-#  Gemeinsamer veränderbarer Zustand und ihre Schutzmechanismen:
-#
-#  A) self.blacklist_set / self.whitelist_set
-#     Schreiber: _execute_allow, _execute_block, cmd_allow, cmd_block,
-#                _reload_lists (alle auf dem asyncio-Event-Loop)
-#     Leser:     on_message (asyncio-Event-Loop)
-#     SICHER: Alle Mutationen auf dem Single-Thread-Event-Loop.
-#     set.add() / set.discard() sind GIL-geschützt. Der Referenz-Tausch
-#     `self.blacklist_set = new_bl` ist auf CPython-Ebene atomar (ein
-#     einziger STORE_ATTR-Bytecode-Befehl). Kein Lock nötig.
-#
-#  B) self.pending_reviews (dict)
-#     Schreiber + Leser: on_message, on_reaction, Befehle — alle Event-Loop.
-#     SICHER: Single-Thread; kein Lock nötig.
-#
-#  C) whitelists/custom.txt und blacklists/custom.txt
-#     Schreiber: _append_to_file (Coroutinen auf dem Event-Loop)
-#     Risiko: Zwei Mods reagieren gleichzeitig → zwei Coroutinen schreiben gleichzeitig.
-#     Schutz: self._file_lock (asyncio.Lock) serialisiert alle Schreibvorgänge.
-#     Garantie: Datei wird nie von zwei Coroutinen gleichzeitig geöffnet.
-#               Siehe _append_to_file-Docstring für den detaillierten Ablauf.
-#
-#  D) Datei-Parsen (ThreadPoolExecutor-Worker)
-#     Jeder Worker erhält seinen eigenen privaten `filepath` und schreibt in sein
-#     eigenes privates `LoadResult.domains`-Set — kein gemeinsamer veränderbarer
-#     Zustand zwischen Threads. Worker rufen nur self.log (threadsicher) auf und
-#     lesen self.config (unveränderlich während des Ladens).
-#     SICHER: Null gemeinsamer Zustand zwischen Threads.
-#
-# ── §3  FEHLERBEHANDLUNG ──────────────────────────────────────────────────
-#
-#  Szenario: Bot hat kein "Redact"-Powerlevel in einem Raum.
-#    → client.redact() wirft eine Ausnahme (typischerweise HTTP 403 MForbidden).
-#    → _redact() fängt ab und protokolliert:
-#        "LÖSCHEN FEHLGESCHLAGEN: ereignis=... raum=... — wahrscheinlich unzureichendes Powerlevel.
-#         Dem Bot PL 50+ geben (redact_events-Einstellung des Raums beachten). Fehler: ..."
-#    → Gibt False zurück. Der Aufrufer (on_message) beachtet message_redacted=False,
-#      SETZT ABER FORT: Warnhinweis und Mod-Raum-Alarm werden trotzdem gesendet.
-#    → Moderationsaufsicht bleibt auch ohne Löschfähigkeit gewahrt.
-#
-#  Weitere Fehlerszenarien und ihre Behandlung:
-#    • mod_room_id nicht gesetzt:       _submit_for_review protokolliert Warnung, kehrt früh zurück.
-#    • Datei-Schreiben schlägt fehl:    _execute_allow/block fängt OSError ab, sendet Fehlerhinweis
-#                                       an Mod-Raum, aktualisiert NICHT das In-Memory-Set
-#                                       (Festplatte und RAM bleiben synchron).
-#    • Linkvorschau-Timeout:            _fetch_og_metadata gibt None zurück, DEBUG-protokolliert.
-#    • Missgeformte URL:                _extract_domains fängt pro-URL ab, fährt fort.
-#    • Datei nicht gefunden:            _domain_generator fängt OSError pro Datei ab.
-#    • Einzelner Loader-Fehler:         asyncio.gather(return_exceptions=True) protokolliert
-#                                       und lädt verbleibende Dateien weiter.
-#    • Powerlevel-API-Fehler:           _get_power_level gibt 0 (ablehnen) zurück und warnt.
-#    • Fehlgeschlagener Hinweisversand: _send_notice fängt ab und protokolliert, gibt None zurück.
-#
-# ── §4  ReDoS-SICHERHEIT ──────────────────────────────────────────────────
-#
-#  Verwendeter Regex (aus Abschnitt 4):
-#    (?:https?://|www\.)  [flache_zeichenklasse]+  (?<![abschließende_satzzeichen])
-#
-#  Warum katastrophales Backtracking hier unmöglich ist:
-#
-#  1. EINZELNE ZEICHENKLASSE mit EINEM Quantifizierer
-#     Der wiederholte Teil ist [a-zA-Z0-9\-._~:@!$&'()*+,;=/?#%\[\]]+
-#     Eine Zeichenklasse ist als Bitset-Lookup in Pythons `re` implementiert:
-#     jedes Zeichen ist entweder im Set (vorwärts) oder nicht (stopp).
-#     Die Engine trifft eine O(1)-Entscheidung pro Zeichen. Es gibt keine
-#     Alternativen zu versuchen, keine Untergruppen zu expandieren. Dies ist
-#     inhärent linear: O(n) wobei n = Anzahl der übereinstimmenden Zeichen.
-#
-#  2. KEINE GESCHACHTELTEN QUANTIFIZIERER
-#     Das gefährliche Muster (X+)+ hat KEIN Äquivalent hier.
-#     Das äußere + gilt für eine einzelne Zeichenentscheidung, nicht für ein
-#     Teilmuster mit eigenem Quantifizierer. (X+)+ kann O(2^n) Pfade erstellen;
-#     ein flaches [klasse]+ erstellt genau 1 Pfad.
-#
-#  3. KEINE ALTERNATION INNERHALB DER WIEDERHOLTEN GRUPPE
-#     (a|b)+ verursacht Backtracking, weil die Engine an jeder Position beide
-#     Alternativen versucht. Unsere Zeichenklasse ist eine logische Vereinigung,
-#     in O(1) durch das Bitset ausgewertet, ohne alternative Zweige.
-#
-#  4. FESTES LOOKBEHIND
-#     (?<![.,;:!?)\]]) prüft genau 1 Zeichen hinter dem Match-Ende.
-#     Pythons `re`-Modul wertet feste Lookbehinds in O(1) aus.
-#
-#  5. re.ASCII-FLAG
-#     Beschränkt die Engine auf 7-Bit-ASCII, vermeidet Unicode-Kategorie-
-#     Scanning (\w im Unicode-Modus berührt Unicode-Tabellen). Bei Nachrichten
-#     mit vielen Emojis oder CJK-Zeichen könnte der Nicht-ASCII-Modus langsamer sein.
-#
-#  Adversarieller Test: 50.000 Leerzeichen gefolgt von einem URL-Zeichen.
-#    Der Regex scannt linear, überspringt alle Leerzeichen (nicht in der Klasse),
-#    findet kein gültiges URL-Präfix und terminiert. O(50001). Kein Explodieren.
-#
-# ── ENDE DES SELBSTAUDITS ──────────────────────────────────────────────────
