@@ -1,5 +1,5 @@
 # =============================================================================
-# base-config.yaml — Standardkonfiguration (v2 — Hochleistungsedition)
+# base-config.yaml — Standardkonfiguration (v2)
 # =============================================================================
 #
 # Diese Standardwerte können nach dem Erstellen einer Instanz im Maubot-Dashboard
@@ -15,29 +15,11 @@
 #   bad-domain.com                        → Domain: "bad-domain.com"
 #   bad-domain.com  # Inline-Notiz        → Domain: "bad-domain.com"
 #
-# ERWARTETES DATEI-LAYOUT (blacklist_dir):
-#   abuse.txt       (~500 K Einträge)
-#   basic.txt       (~500 K Einträge)
-#   crypto.txt      (~500 K Einträge)
-#   drugs.txt       (~500 K Einträge)
-#   fraud.txt       (~500 K Einträge)
-#   gambling.txt    (~500 K Einträge)
-#   malware.txt     (~500 K Einträge)
-#   phishing.txt    (~500 K Einträge)
-#   porn.txt        (~500 K Einträge)
-#   ransomware.txt  (~500 K Einträge)
-#   scam.txt        (~500 K Einträge)
-#   tracking.txt    (~500 K Einträge)
-#   vaping.txt      (~500 K Einträge)
-#   custom.txt      (zur Laufzeit vom Bot verwaltet)
 # =============================================================================
-
-
 # -----------------------------------------------------------------------------
 # LISTENVERZEICHNISSE
 # -----------------------------------------------------------------------------
 
-# Verzeichnis mit den 13 großen Blacklist-.txt-Dateien.
 # Der Bot streamt jede Datei beim Start durch einen Generator — keine vollständige
 # Dateieinlesung in den RAM vor der Deduplizierung.
 blacklist_dir: /data/blacklists/
