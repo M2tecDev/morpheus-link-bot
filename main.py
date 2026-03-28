@@ -1,9 +1,6 @@
 """
 URL-Filter-Bot — Hochleistungsedition  (v2)
 ============================================
-Maubot-Plugin, das URL-Richtlinien in Matrix-Räumen gegen einen Korpus von
-ca. 6,5 Millionen gesperrten Domains aus 13 großen Hostfile-formatierten
-Listen durchsetzt.
 
 Designziele
 -----------

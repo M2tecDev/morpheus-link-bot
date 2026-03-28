@@ -35,7 +35,7 @@ id: de.maubot.url_filter_bot_v2
 
 name: URL Filter Bot (High-Performance Edition)
 version: 2.0.0
-license: MIT
+license: AGPL-3.0-or-later
 description: >
   Scans Matrix room messages for URLs and checks them against up to 13
   massive hostfile-format blacklists (≈6.5 M domains total). Uses generator-
