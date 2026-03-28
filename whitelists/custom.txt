@@ -1,0 +1,20 @@
+# =============================================================================
+# whitelists/custom.txt — Laufzeit-Whitelist (Bot-verwaltet)
+# =============================================================================
+# Diese Datei wird AUTOMATISCH vom URL-Filter-Bot verwaltet.
+# Wenn ein Moderator auf ✅ bei einer Überprüfungsanfrage klickt oder den
+# Befehl `!allow` verwendet, wird die Domain vom Bot zur Laufzeit hier angehängt.
+#
+# Du kannst vertrauenswürdige Domains auch manuell im Standard-Hostfile-Format hinzufügen:
+#   trusted-domain.com
+#   0.0.0.0 also-fine-domain.com    ← IP-Präfix wird ignoriert; nur Domain wird verwendet
+#   # Dies ist ein Kommentar
+#
+# Whitelisted Domains:
+#   - Werden NICHT gelöscht, auch wenn sie in Blacklist-Dateien erscheinen
+#     (Whitelist hat in der Bot-Logik Vorrang)
+#   - Lösen eine Markdown-Linkvorschau aus, wenn enable_link_previews aktiviert ist
+#
+# Änderungen durch den Bot treten sofort in Kraft. Für manuelle Bearbeitungen
+# den Befehl `!reloadlists` verwenden, um die In-Memory-Sets zu aktualisieren.
+# =============================================================================

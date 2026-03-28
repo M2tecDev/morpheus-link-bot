@@ -1,0 +1,104 @@
+# =============================================================================
+# base-config.yaml — Standardkonfiguration (v2 — Hochleistungsedition)
+# =============================================================================
+#
+# Diese Standardwerte können nach dem Erstellen einer Instanz im Maubot-Dashboard
+# angepasst werden. Alle Verzeichnispfade können absolut (/data/lists/) oder relativ
+# zum Maubot-Arbeitsverzeichnis (in Docker üblicherweise /data/) angegeben werden.
+#
+# HOSTFILE-FORMAT (wird in allen .txt-Dateien in den Listenverzeichnissen akzeptiert):
+#
+#   # Ganzzeiliger Kommentar              → wird ignoriert
+#   (leere Zeile)                         → wird ignoriert
+#   0.0.0.0 bad-domain.com               → Domain: "bad-domain.com"
+#   127.0.0.1 bad-domain.com             → Domain: "bad-domain.com"
+#   bad-domain.com                        → Domain: "bad-domain.com"
+#   bad-domain.com  # Inline-Notiz        → Domain: "bad-domain.com"
+#
+# ERWARTETES DATEI-LAYOUT (blacklist_dir):
+#   abuse.txt       (~500 K Einträge)
+#   basic.txt       (~500 K Einträge)
+#   crypto.txt      (~500 K Einträge)
+#   drugs.txt       (~500 K Einträge)
+#   fraud.txt       (~500 K Einträge)
+#   gambling.txt    (~500 K Einträge)
+#   malware.txt     (~500 K Einträge)
+#   phishing.txt    (~500 K Einträge)
+#   porn.txt        (~500 K Einträge)
+#   ransomware.txt  (~500 K Einträge)
+#   scam.txt        (~500 K Einträge)
+#   tracking.txt    (~500 K Einträge)
+#   vaping.txt      (~500 K Einträge)
+#   custom.txt      (zur Laufzeit vom Bot verwaltet)
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# LISTENVERZEICHNISSE
+# -----------------------------------------------------------------------------
+
+# Verzeichnis mit den 13 großen Blacklist-.txt-Dateien.
+# Der Bot streamt jede Datei beim Start durch einen Generator — keine vollständige
+# Dateieinlesung in den RAM vor der Deduplizierung.
+blacklist_dir: /data/blacklists/
+
+# Verzeichnis mit den Whitelist-.txt-Dateien.
+# Whitelisted Domains werden durchgelassen (keine Löschung) und erhalten optional
+# eine Markdown-Linkvorschau. Die Whitelist wird ZUERST in der Routing-Logik geprüft.
+whitelist_dir: /data/whitelists/
+
+# -----------------------------------------------------------------------------
+# MODERATIONSRAUM
+# -----------------------------------------------------------------------------
+
+# Vollständige Matrix-Raum-ID des Moderations-/Admin-Raums.
+# Unbekannte URLs werden hierhin als Überprüfungsanfragen mit ✅/❌-Reaktionsknöpfen
+# weitergeleitet. Der Bot muss Mitglied dieses Raums mit mindestens
+# "Nachrichten senden"-Rechten sein.
+mod_room_id: "!DzRpAroBgyJ2JzMptj9aNEdfCqNkzpPwzaSz_c7U0LE"
+
+
+# -----------------------------------------------------------------------------
+# MODERATIONSBERECHTIGUNGEN
+# -----------------------------------------------------------------------------
+# Ein Nutzer kann Moderationsaktionen durchführen, wenn EINE der folgenden
+# Bedingungen erfüllt ist.
+
+mod_permissions:
+  # Mindest-Matrix-Powerlevel im Mod-Raum, der für Genehmigen/Sperren benötigt wird.
+  # 50 = Standard-"Moderator"-Level.  100 = Nur Raum-Admin.  0 = Jeder.
+  min_power_level: 50
+
+  # Explizite Matrix-Nutzer-IDs, die immer moderieren dürfen,
+  # unabhängig vom Powerlevel (nützlich für serverübergreifende Betreiber).
+  # Beispiel: ["@alice:matrix.org", "@bob:example.com"]
+  allowed_users: []
+
+
+# -----------------------------------------------------------------------------
+# LINKVORSCHAUEN
+# -----------------------------------------------------------------------------
+
+# Wenn true, ruft der Bot Open-Graph-Metadaten für whitelisted URLs ab und
+# postet eine Nur-Markdown-Vorschaubenachrichtigung (verwendet **Fettdruck** und
+# > Blockzitate — kein HTML, kompatibel mit allen Matrix-Clients).
+enable_link_previews: true
+
+# HTTP-Timeout (Sekunden) für die Linkvorschau-Abrufanfrage.
+link_preview_timeout: 5
+
+
+# -----------------------------------------------------------------------------
+# LEISTUNGSOPTIMIERUNG
+# -----------------------------------------------------------------------------
+
+# Maximale Anzahl der Worker-Threads für das parallele Datei-Parsen.
+# Jede große Datei wird in eigenem Thread geparst. Standard null = os.cpu_count().
+# Auf speicherkonstrained Servern reduzieren (jeder Thread puffert ~100 MB).
+loader_threads: null
+
+# Minimale Domain-String-Länge beim Parsen (kurze Einträge/Müll überspringen).
+min_domain_length: 4
+
+# Maximale Domain-String-Länge beim Parsen (übergroße Müllzeilen überspringen).
+max_domain_length: 253

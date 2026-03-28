@@ -1,0 +1,15 @@
+# =============================================================================
+# blacklists/custom.txt — Laufzeit-Blacklist (Bot-verwaltet)
+# =============================================================================
+# Diese Datei wird AUTOMATISCH vom URL-Filter-Bot verwaltet.
+# Wenn ein Moderator auf ❌ bei einer Überprüfungsanfrage klickt oder den
+# Befehl `!block` verwendet, wird die Domain vom Bot zur Laufzeit hier angehängt.
+#
+# Du kannst Domains auch manuell im Standard-Hostfile-Format hinzufügen:
+#   bad-domain.com
+#   0.0.0.0 another-bad-domain.com
+#   # Dies ist ein Kommentar
+#
+# Änderungen durch den Bot treten sofort in Kraft (das In-Memory-Set wird
+# synchron aktualisiert). Für manuelle Bearbeitungen `!reloadlists` verwenden.
+# =============================================================================

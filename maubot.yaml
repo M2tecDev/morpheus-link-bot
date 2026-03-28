@@ -1,0 +1,63 @@
+# =============================================================================
+# maubot.yaml — Plugin Manifest  (v2 — High-Performance Edition)
+# =============================================================================
+#
+# HOW TO PACKAGE:
+#   zip -r url_filter_v2.mbp \
+#       maubot.yaml base-config.yaml main.py \
+#       blacklists/custom.txt whitelists/custom.txt
+#
+# HOW TO INSTALL:
+#   1. Upload url_filter_v2.mbp via the Maubot dashboard
+#      (/_matrix/maubot/#/plugins)
+#   2. Create a new instance → assign a bot client → save.
+#   3. Edit the instance config using the keys in base-config.yaml.
+#   4. Drop your 13 large .txt hostfiles into the configured blacklist_dir.
+#
+# RUNTIME NOTES:
+#   • Startup takes 20-60 s for 6.5 M domains (disk I/O bound, not CPU).
+#     The Matrix sync loop is never blocked during this time because parsing
+#     runs inside asyncio's default ThreadPoolExecutor.
+#   • Peak RAM during load: ~900 MB - 1.3 GB (see SELF-AUDIT in main.py).
+#   • After load, per-message lookup is O(1) — sub-microsecond.
+#
+# REQUIREMENTS:
+#   maubot    >= 0.4.0
+#   mautrix   >= 0.20.0
+#   aiohttp   (bundled with maubot)
+#   Python    >= 3.10  (for match/case readability; 3.9 also works)
+# =============================================================================
+
+maubot: 0.4.0
+
+# Unique reverse-domain plugin ID — change if you fork or redistribute
+id: de.maubot.url_filter_bot_v2
+
+name: URL Filter Bot (High-Performance Edition)
+version: 2.0.0
+license: MIT
+description: >
+  Scans Matrix room messages for URLs and checks them against up to 13
+  massive hostfile-format blacklists (≈6.5 M domains total). Uses generator-
+  based parsing, run_in_executor for non-blocking startup, and O(1) set
+  lookups. Unknown URLs are forwarded to a mod room for emoji-reaction review.
+
+author:
+  - Kori <korinator21@gmail.com>
+
+# Python modules bundled in the .mbp archive (each maps to a .py file)
+modules:
+  - main
+
+# The Plugin subclass inside main.py
+main_class: URLFilterBot
+
+# Enables the per-instance config editor in the Maubot dashboard
+config: true
+
+# Seed files bundled in the archive.
+# The bot appends to these at runtime when mods approve/block domains.
+extra_files:
+  - blacklists/custom.txt
+  - whitelists/custom.txt
+  - base-config.yaml
