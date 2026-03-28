@@ -234,4 +234,4 @@ Das aktualisierte `.mbp` im Maubot-Dashboard hochladen und die Instanz neu start
 
 ---
 
-*Erstellt von Kori — Lizenz: MIT*
+*Erstellt von Kori — Lizenz: AGPL-3.0-or-later*
