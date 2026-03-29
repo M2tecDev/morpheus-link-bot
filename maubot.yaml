@@ -26,7 +26,7 @@ maubot: 0.4.0
 id: de.maubot.url_filter_bot
 
 name: URL Filter Bot
-version: 2.1.0
+version: 2.2.0
 license: AGPL-3.0-or-later
 description: >
   Scannt Matrix-Raumnachrichten auf URLs und prueft diese gegen konfigurierbare
@@ -47,6 +47,10 @@ main_class: URLFilterBot
 
 # Enables the per-instance config editor in the Maubot dashboard
 config: true
+
+# Enables the per-instance plugin database (mautrix async_db / aiosqlite / asyncpg)
+database: true
+database_type: asyncpg
 
 # Seed files bundled in the archive.
 # The bot appends to these at runtime when mods approve/block domains.

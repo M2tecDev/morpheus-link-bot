@@ -1,5 +1,5 @@
 """
-URL-Filter-Bot — Hochleistungsedition  (v2.1)
+URL-Filter-Bot — Hochleistungsedition  (v2.2)
 ============================================
 
 Designziele
@@ -69,6 +69,7 @@ from mautrix.types import (
     TextMessageEventContent,
     UserID,
 )
+from mautrix.util.async_db import UpgradeTable, Scheme
 from mautrix.util.config import BaseProxyConfig, ConfigUpdateHelper
 
 
@@ -219,6 +220,87 @@ _NAKED_DOMAIN_RE: re.Pattern = re.compile(
     re.ASCII,
 )
 
+# ---------------------------------------------------------------------------
+# MATRIX-ID-REGEX — Entfernt Matrix-Bezeichner vor der URL-Erkennung
+# ---------------------------------------------------------------------------
+# Verhindert Falsch-Positive durch Matrix-Nutzer- und Raum-IDs:
+#   "@kori:koridev.tail183fd1.ts.net"  → Homeserver "koridev.tail183fd1.ts.net"
+#                                        würde sonst als Domain erkannt.
+#   "!room:homeserver.example.org"     → Homeserver-Teil würde als Domain gelten.
+#
+# ABGEDECKTE BEZEICHNER-TYPEN:
+#   @localpart:homeserver[:port]  — Matrix-Nutzer-IDs (MXID)
+#   !localpart:homeserver[:port]  — Matrix-Raum-IDs
+#
+# BEWUSST NICHT ABGEDECKT: # (Raum-Alias) und $ (Event-IDs), da '#' in URL-
+# Fragmenten vorkommt und '$' nur in alten Event-ID-Formaten. Der Lookbehind in
+# _NAKED_DOMAIN_RE enthält bereits '@', sodass direkt @-präfixierte Token schon
+# blockiert werden. Diese Regex entfernt das GESAMTE MXID-Token inkl. Homeserver.
+#
+# REDOS-SICHERHEIT:
+#   Alle Zeichenklassen sind nach oben begrenzt ({1,255}).
+#   Keine geschachtelten Quantifizierer. Worst-Case O(n). ✓
+_MATRIX_ID_RE: re.Pattern = re.compile(
+    r'[@!][a-zA-Z0-9._\-/=+]{1,255}:[a-zA-Z0-9.\-]{1,255}(?::\d{1,5})?',
+    re.ASCII,
+)
+
+
+# ===========================================================================
+# ABSCHNITT 4b — DATENBANK-MIGRATION (mautrix async_db UpgradeTable)
+# ===========================================================================
+#
+# Maubot übergibt diese Tabelle an die Datenbankschicht, bevor das Plugin
+# gestartet wird. Jede registrierte Funktion entspricht einer Schema-Version.
+# Die Versionsnummer wird automatisch aus der Registrierungsreihenfolge abgeleitet.
+# Das `scheme`-Argument erlaubt DB-spezifische SQL-Zweige (PostgreSQL vs. SQLite).
+#
+# WICHTIG: Dieses Objekt muss auf Modulebene definiert sein, damit
+# `get_db_upgrade_table()` es zurückgeben kann.
+
+upgrade_table = UpgradeTable()
+
+
+@upgrade_table.register(description="Initial link_log table")
+async def upgrade_v1(conn, scheme: Scheme) -> None:
+    """
+    Erstellt die link_log-Tabelle für die Protokollierung unbekannter URLs.
+
+    Spalten:
+      id        — Primärschlüssel (BIGSERIAL auf PG, INTEGER ROWID auf SQLite)
+      sender    — Matrix-User-ID der Person, die den Link gesendet hat
+      url       — Vollständige URL (oder konstruierte https://<domain> als Fallback)
+      domain    — Normalisierter Hostname (für effizientes Löschen bei Freigabe)
+      logged_at — Zeitstempel der Protokollierung (DB-seitig gesetzt)
+
+    SICHERHEITSHINWEIS:
+      Beide Branches verwenden vollständig statische SQL-Strings — keine
+      f-String-Interpolation, kein Nutzereingabefluss. Der `scheme`-Parameter
+      ist ein Enum-Wert aus dem mautrix-Datenbankframework, nicht benutzerkontrolliert.
+    """
+    if scheme == Scheme.POSTGRES:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS link_log (
+                id        BIGSERIAL PRIMARY KEY,
+                sender    TEXT      NOT NULL,
+                url       TEXT      NOT NULL,
+                domain    TEXT      NOT NULL,
+                logged_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+    else:
+        # SQLite/aiosqlite: INTEGER PRIMARY KEY ist ein Alias für rowid,
+        # wird automatisch inkrementiert — kein AUTOINCREMENT-Schlüsselwort nötig.
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS link_log (
+                id        INTEGER   PRIMARY KEY,
+                sender    TEXT      NOT NULL,
+                url       TEXT      NOT NULL,
+                domain    TEXT      NOT NULL,
+                logged_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
 
 # ===========================================================================
 # ABSCHNITT 5 — KONFIGURATION
@@ -322,6 +404,12 @@ class URLFilterBot(Plugin):
     @classmethod
     def get_config_class(cls) -> type[BaseProxyConfig]:
         return Config
+
+    @classmethod
+    def get_db_upgrade_table(cls) -> UpgradeTable:
+        """Gibt die UpgradeTable für die plugin-eigene Datenbank zurück.
+        Maubot führt ausstehende Migrationen automatisch vor start() aus."""
+        return upgrade_table
 
     async def start(self) -> None:
         """
@@ -672,6 +760,15 @@ class URLFilterBot(Plugin):
         """
         domains: Set[str] = set()
 
+        # ── Schritt 0: Matrix-IDs aus dem Klartext entfernen ──────────────────
+        # "@nutzer:homeserver" und "!raum:homeserver" aus `body` substituieren,
+        # bevor die Regex-Schritte 2 und 3 darauf angewendet werden.
+        # Ohne diesen Schritt würde z.B. der Homeserver-Teil von
+        # "@kori:koridev.tail183fd1.ts.net" als Domain "koridev.tail183fd1.ts.net"
+        # erkannt (weil ':' nicht im Lookbehind von _NAKED_DOMAIN_RE enthalten ist).
+        # Schritt 1 (formatted_body) ist nicht betroffen — hrefs enthalten keine MXIDs.
+        clean_body: str = _MATRIX_ID_RE.sub(" ", body)
+
         # ── Schritt 1: <a href> aus formatted_body ────────────────────────────
         if formatted_body:
             for href in _HREF_RE.findall(formatted_body):
@@ -696,7 +793,7 @@ class URLFilterBot(Plugin):
                     continue
 
         # ── Schritt 2: _URL_RE auf Klartext (http://, www.) ──────────────────
-        for raw in _URL_RE.findall(body):
+        for raw in _URL_RE.findall(clean_body):
             try:
                 url = raw if raw.startswith("http") else "http://" + raw
                 host = urlparse(url).netloc.split(":")[0].lower()
@@ -708,7 +805,7 @@ class URLFilterBot(Plugin):
                 continue
 
         # ── Schritt 3: _NAKED_DOMAIN_RE + TLD-Validierung ────────────────────
-        for candidate in _NAKED_DOMAIN_RE.findall(body):
+        for candidate in _NAKED_DOMAIN_RE.findall(clean_body):
             candidate = candidate.lower()
             if "." not in candidate:
                 continue
@@ -739,6 +836,9 @@ class URLFilterBot(Plugin):
           2. URL aus _URL_RE auf Klartext (http://, www.).
           3. Konstruierte Fallback-URL: "https://{domain}" (für nackte Domains aus Schritt 3).
         """
+        # Schritt 0: Matrix-IDs aus dem Klartext entfernen (konsistent mit _extract_domains)
+        clean_body: str = _MATRIX_ID_RE.sub(" ", body)
+
         # Schritt 1: formatted_body hrefs
         if formatted_body:
             for href in _HREF_RE.findall(formatted_body):
@@ -759,7 +859,7 @@ class URLFilterBot(Plugin):
                     continue
 
         # Schritt 2: _URL_RE auf Klartext
-        for raw in _URL_RE.findall(body):
+        for raw in _URL_RE.findall(clean_body):
             try:
                 url = raw if raw.startswith("http") else "http://" + raw
                 host = urlparse(url).netloc.split(":")[0].lower()
@@ -983,8 +1083,17 @@ class URLFilterBot(Plugin):
                 f"Du wirst benachrichtigt, sobald eine Entscheidung getroffen wurde.",
             )
 
+        # body / formatted_body für URL-Rekonstruktion und Link-Protokollierung
+        _body: str = evt.content.body or ""
+        _fmt:  Optional[str] = getattr(evt.content, "formatted_body", None) or None
+
         for domain in domains:
             await self._submit_for_review(domain, evt)
+            # Unbekannte URL in der Datenbank protokollieren (für !stats-Auswertung).
+            # Nur wenn die Datenbankinstanz verfügbar ist (database: true in maubot.yaml).
+            if self.database is not None:
+                url = self._find_url_for_domain(_body, domain, _fmt)
+                await self._log_link(evt.sender, url or f"https://{domain}", domain)
 
         # Verstoß erfassen und ggf. stummschalten.
         await self._handle_violation(evt.sender, evt.room_id)
@@ -1259,6 +1368,10 @@ class URLFilterBot(Plugin):
         self.pending_reviews.pop(alert_id, None)
         self._pending_domains.discard(domain)   # Bei Bedarf für zukünftige Überprüfungen wieder öffnen
 
+        # Alle protokollierten (noch nicht genehmigten) Einträge für diese Domain löschen.
+        if self.database is not None:
+            await self._delete_logged_links_for_domain(domain)
+
         await self._edit_notice(
             self.config["mod_room_id"],
             alert_id,
@@ -1357,6 +1470,9 @@ class URLFilterBot(Plugin):
             else:
                 self.whitelist_set.add(domain)
                 self.blacklist_set.discard(domain)
+            # Alle protokollierten Einträge für diese Domain aus dem Link-Log löschen.
+            if self.database is not None:
+                await self._delete_logged_links_for_domain(domain)
             await evt.reply(f"✅ `{domain}` wurde zur Whitelist hinzugefügt.")
             self.log.info("'%s' manuell von %s auf die Whitelist gesetzt.", domain, evt.sender)
         except PermissionError:
@@ -1698,6 +1814,70 @@ class URLFilterBot(Plugin):
 
         await self._send_notice(evt.room_id, help_text, render_markdown=True)
 
+    @command.new("stats", help="[Admin] Zeigt die Anzahl protokollierter Links für einen Nutzer.")
+    @command.argument("user", pass_raw=True, required=True)
+    async def cmd_link_stats(self, evt: MessageEvent, user: str) -> None:
+        """
+        !stats <@nutzer:server> — Gibt die Anzahl aktuell protokollierter (noch nicht
+        genehmigter) Links für den angegebenen Nutzer zurück.
+
+        BERECHTIGUNGSMODELL
+        -------------------
+        Nur Nutzer, die explizit in `mod_permissions.allowed_users` der Instanzkonfiguration
+        aufgeführt sind, dürfen diesen Befehl ausführen. Das Powerlevel im Mod-Raum genügt
+        hier NICHT — der Zugang ist absichtlich auf benannte Administratoren beschränkt.
+
+        Hintergrund: _is_mod() erlaubt Powerlevel-basierte Moderation. Für Statistikabfragen
+        soll die Berechtigung explizit und unveränderlich konfiguriert sein.
+        """
+        # ── Strenge Berechtigungsprüfung: nur explizit benannte Nutzer ────────
+        # SICHERHEIT: isinstance-Guard — verhindert Substring-Match falls
+        # allowed_users fälschlicherweise als String statt als Liste konfiguriert.
+        allowed_list = self.config.get("mod_permissions", {}).get("allowed_users", [])
+        if not isinstance(allowed_list, list):
+            allowed_list = []
+        if str(evt.sender) not in allowed_list:
+            await evt.reply("❌ Du hast keine Berechtigung, diesen Befehl auszuführen.")
+            return
+
+        user_id = user.strip()
+        if not user_id:
+            await evt.reply("❌ Verwendung: `!stats <@nutzer:server>`")
+            return
+
+        # SICHERHEIT: Matrix-ID-Format validieren.
+        # Eine gültige MXID beginnt mit '@' und enthält exakt einen ':'-Trenner.
+        # Ohne diese Prüfung könnten beliebige Strings (inkl. HTML-Zeichen) in die
+        # Reply-Nachricht eingebettet werden. Da evt.reply() formatted_body erzeugt,
+        # könnten ungültige Strings zu unerwarteter Darstellung führen.
+        if not user_id.startswith("@") or ":" not in user_id[1:]:
+            await evt.reply(
+                "❌ Ungültige Nutzer-ID. Erwartet: `!stats <@nutzer:homeserver>`\n"
+                "Beispiel: `!stats @alice:matrix.org`"
+            )
+            return
+
+        if self.database is None:
+            await evt.reply("❌ Die Datenbank ist nicht verfügbar. Bitte `database: true` in `maubot.yaml` sicherstellen.")
+            return
+
+        try:
+            count = await self.database.fetchval(
+                "SELECT COUNT(*) FROM link_log WHERE sender = $1",
+                user_id,
+            )
+        except Exception:
+            self.log.exception("Datenbankfehler bei !stats-Abfrage für Nutzer %s.", user_id)
+            await evt.reply("❌ Datenbankfehler beim Abrufen der Statistik. Siehe Maubot-Logs.")
+            return
+
+        count = count or 0
+        await evt.reply(
+            f"📊 **Link-Log-Statistik**\n"
+            f"Nutzer: `{user_id}`\n"
+            f"Protokollierte (nicht genehmigte) Links: **{count}**",
+        )
+
     # ===========================================================================
     # ABSCHNITT 16 — BERECHTIGUNGSPRÜFUNG
     # ===========================================================================
@@ -1715,6 +1895,19 @@ class URLFilterBot(Plugin):
         mod_cfg      = self.config.get("mod_permissions", {})
         allowed_list = mod_cfg.get("allowed_users", [])
         min_level    = int(mod_cfg.get("min_power_level", 50))
+
+        # SICHERHEIT: Typprüfung — verhindert Teilstring-Vergleich falls
+        # allowed_users versehentlich als String statt als Liste konfiguriert ist.
+        # Beispiel: "allowed_users: @alice:server" (String) würde bei einem
+        # naiven `str(user_id) in allowed_list`-Check als Substring-Suche wirken,
+        # da `"in"` bei Strings Zeichenketten-Enthaltensein prüft, nicht Listenmitgliedschaft.
+        if not isinstance(allowed_list, list):
+            self.log.warning(
+                "Konfigurationsfehler: mod_permissions.allowed_users ist kein Array (Typ: %s). "
+                "Erlaubte Nutzer werden ignoriert.",
+                type(allowed_list).__name__,
+            )
+            allowed_list = []
 
         if str(user_id) in allowed_list:
             return True
@@ -2139,6 +2332,58 @@ class URLFilterBot(Plugin):
                 raise
 
         self.log.debug("'%s' aus '%s' entfernt.", domain, abs_filepath)
+
+
+    # ===========================================================================
+    # ABSCHNITT 19b — DATENBANK-HILFSMETHODEN (Link-Protokollierung)
+    # ===========================================================================
+
+    async def _log_link(self, sender: UserID, url: str, domain: str) -> None:
+        """
+        Schreibt einen neuen Eintrag in die link_log-Tabelle.
+
+        Wird aufgerufen, wenn eine Nachricht mit einer **unbekannten** Domain
+        erkannt wird. Bereits bekannte (whitelisted/blacklisted) Domains werden
+        NICHT protokolliert — sie kommen nie durch _handle_unknown.
+
+        Parameter:
+          sender  — Matrix-User-ID der Person, die den Link gesendet hat
+          url     — Vollständige URL oder "https://<domain>" als Fallback
+          domain  — Normalisierter Hostname (für späteres Löschen bei Freigabe)
+        """
+        try:
+            await self.database.execute(
+                "INSERT INTO link_log (sender, url, domain) VALUES ($1, $2, $3)",
+                str(sender), url, domain,
+            )
+            self.log.debug("Link protokolliert: sender=%s domain=%s url=%s", sender, domain, url)
+        except Exception:
+            self.log.exception(
+                "Datenbankfehler beim Protokollieren von Link '%s' für %s.", url, sender
+            )
+
+    async def _delete_logged_links_for_domain(self, domain: str) -> None:
+        """
+        Entfernt alle link_log-Einträge für `domain`.
+
+        Wird aufgerufen, sobald eine Domain **freigegeben** (whitelisted) wird —
+        entweder über die ✅-Reaktion im Mod-Raum (_execute_allow) oder über den
+        !allow-Befehl (cmd_allow). Damit bleibt die Statistik korrekt: bereits
+        genehmigte Links zählen nicht mehr in !stats.
+
+        Fehler werden nur ins Log geschrieben und nicht nach oben propagiert,
+        damit der eigentliche Freigabe-Ablauf nicht unterbrochen wird.
+        """
+        try:
+            await self.database.execute(
+                "DELETE FROM link_log WHERE domain = $1",
+                domain,
+            )
+            self.log.debug("Link-Log-Einträge für Domain '%s' gelöscht.", domain)
+        except Exception:
+            self.log.exception(
+                "Datenbankfehler beim Löschen von Link-Log-Einträgen für Domain '%s'.", domain
+            )
 
 
 # ===========================================================================
