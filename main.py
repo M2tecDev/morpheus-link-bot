@@ -1,5 +1,5 @@
 """
-URL-Filter-Bot — Hochleistungsedition  (v2.2)
+URL-Filter-Bot — Hochleistungsedition  (v2.2.1)
 ============================================
 
 Designziele
@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import datetime
 import os
 import re
 import time
@@ -327,6 +328,8 @@ class Config(BaseProxyConfig):
         helper.copy("warn_cooldown")
         helper.copy("mute_enabled")
         helper.copy("mute_threshold")
+        helper.copy("cleanup_enabled")
+        helper.copy("cleanup_after_days")
 
 
 # ===========================================================================
@@ -391,6 +394,9 @@ class URLFilterBot(Plugin):
                           Zählt Verstöße innerhalb eines 5-Minuten-Fensters.
                           Auslöser für automatisches Stummschalten bei Überschreitung
                           von `mute_threshold`.
+      _cleanup_task     — asyncio.Task für den periodischen Datenbank-Bereinigungsloop.
+                          None wenn cleanup_enabled = false oder DB nicht verfügbar.
+                          Wird in stop() abgebrochen und sauber abgewartet.
     """
 
     # Maximale Anzahl zu merkender Event-IDs für die Deduplizierung.
@@ -458,6 +464,11 @@ class URLFilterBot(Plugin):
         # Spam-Schutz: Verstoß-Zeitstempel pro Nutzer (monotonic)
         self._violation_counts: Dict[str, List[float]] = {}
 
+        # Datenbank-Bereinigungsaufgabe — None bis nach dem Start initialisiert.
+        # KRITISCH: Muss VOR super().start() deklariert werden, damit kein
+        # AttributeError entsteht, falls stop() vor dem Task-Start aufgerufen wird.
+        self._cleanup_task: Optional[asyncio.Task] = None
+
         # ── Maubot-Basisklasse starten (gibt Kontrolle an asyncio ab) ─────────
         await super().start()
         self.config.load_and_update()
@@ -472,8 +483,35 @@ class URLFilterBot(Plugin):
 
         await self._reload_lists()
 
+        # ── Datenbank-Bereinigungsloop starten (wenn aktiviert) ───────────────
+        # asyncio.get_event_loop().create_task() ist sicher, weil wir uns hier
+        # innerhalb einer laufenden Coroutine befinden (nach super().start()).
+        # Der Task läuft vollständig nicht-blockierend parallel zum Sync-Loop.
+        if self.config.get("cleanup_enabled", False) and self.database is not None:
+            self._cleanup_task = asyncio.get_event_loop().create_task(
+                self._cleanup_loop(),
+                name="urlfilter_cleanup",
+            )
+            self.log.info(
+                "Datenbank-Bereinigungsloop gestartet (cleanup_after_days=%d).",
+                int(self.config.get("cleanup_after_days", 30)),
+            )
+
     async def stop(self) -> None:
-        """Geordnetes Herunterfahren — gibt den Thread-Pool frei."""
+        """Geordnetes Herunterfahren — gibt den Thread-Pool frei und bricht
+        den Bereinigungsloop sauber ab."""
+        # ── Bereinigungsloop abbrechen ─────────────────────────────────────────
+        # cancel() schickt CancelledError an den nächsten await-Punkt im Task.
+        # Das kurze `await` danach stellt sicher, dass der Task vollständig
+        # beendet wurde, bevor wir den Event-Loop freigeben.
+        if self._cleanup_task is not None and not self._cleanup_task.done():
+            self._cleanup_task.cancel()
+            try:
+                await self._cleanup_task
+            except asyncio.CancelledError:
+                pass  # Erwartetes Ergebnis beim sauberen Abbruch
+            self._cleanup_task = None
+
         self._loader_pool.shutdown(wait=False, cancel_futures=True)
         await super().stop()
         self.log.info("URLFilterBot wurde beendet.")
@@ -2383,6 +2421,85 @@ class URLFilterBot(Plugin):
         except Exception:
             self.log.exception(
                 "Datenbankfehler beim Löschen von Link-Log-Einträgen für Domain '%s'.", domain
+            )
+
+    async def _cleanup_loop(self) -> None:
+        """
+        Endloser Hintergrund-Task: führt `_run_link_log_cleanup()` beim Start
+        und danach alle 24 Stunden aus.
+
+        NEBENLÄUFIGKEITSMODELL
+        ----------------------
+        Dieser Task läuft als eigene asyncio.Task parallel zum Matrix-Sync-Loop.
+        Beide laufen auf demselben Thread (single-threaded asyncio), wechseln
+        sich aber kooperativ bei `await`-Punkten ab. Die Bereinigungsabfrage ist
+        eine einzige parametrisierte DELETE-Anweisung — der Event-Loop wird nur
+        für die Dauer des DB-Round-Trips geblockt (typischerweise < 10 ms).
+
+        ABBRUCHSICHERHEIT
+        -----------------
+        asyncio.CancelledError wird bei `await asyncio.sleep(...)` ausgelöst,
+        wenn stop() `_cleanup_task.cancel()` aufruft. Der Fehler propagiert
+        ungehindert aus dem Loop heraus — das ist das korrekte Verhalten für
+        einen sauber abbrechenden asyncio-Task.
+        """
+        self.log.debug("Bereinigungsloop gestartet.")
+        while True:
+            await self._run_link_log_cleanup()
+            # 24-Stunden-Intervall — CancelledError bricht hier sauber ab
+            await asyncio.sleep(24 * 60 * 60)
+
+    async def _run_link_log_cleanup(self) -> None:
+        """
+        Löscht alle link_log-Einträge, die älter als `cleanup_after_days` Tage sind.
+
+        DATENBANKKOMPATIBILITÄT
+        -----------------------
+        Der Cutoff-Zeitpunkt wird in Python berechnet (datetime.datetime) und als
+        Bindungsparameter `$1` übergeben. Damit entfällt jede datenbankspezifische
+        INTERVAL-Syntax — asyncpg und aiosqlite erhalten identische Abfragen.
+        ISO-8601-Timestamps (gespeichert von aiosqlite) vergleichen korrekt mit
+        Python-datetime-Objekten über den Treiber-Typ-Adapter.
+
+        SICHERHEIT
+        ----------
+        Vollständig parametrisierte Abfrage — kein f-String, keine String-
+        Konkatenation. `cleanup_after_days` wird explizit zu `int()` gecastet
+        und fließt ausschließlich in die Python-`timedelta`-Berechnung ein,
+        nicht direkt in den SQL-String.
+
+        LOGGING
+        -------
+        Anzahl gelöschter Zeilen wird auf INFO geloggt, damit Betreiber die
+        Wirkung der Bereinigung nachvollziehen können.
+        """
+        if self.database is None:
+            return
+
+        days = int(self.config.get("cleanup_after_days", 30))
+        if days <= 0:
+            self.log.warning(
+                "cleanup_after_days ist %d (≤ 0) — Bereinigung wird übersprungen.", days
+            )
+            return
+
+        cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=days)
+
+        try:
+            await self.database.execute(
+                "DELETE FROM link_log WHERE logged_at < $1",
+                cutoff,
+            )
+            self.log.info(
+                "Link-Log-Bereinigung: Einträge älter als %d Tage (vor %s UTC) gelöscht.",
+                days,
+                cutoff.strftime("%Y-%m-%d %H:%M"),
+            )
+        except Exception:
+            self.log.exception(
+                "Datenbankfehler beim Bereinigen alter link_log-Einträge "
+                "(cutoff=%s, days=%d).",
+                cutoff, days,
             )
 
 

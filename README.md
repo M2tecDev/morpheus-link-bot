@@ -1,4 +1,4 @@
-# URL-Filter-Bot für Matrix — v2.2.0
+# URL-Filter-Bot für Matrix — v2.2.1
 
 Ein Maubot-Plugin, das eingehende Nachrichten in Matrix-Räumen auf URLs scannt und diese gegen konfigurierbare Blacklists und Whitelists prüft. Unbekannte Links werden automatisch zur Moderatorenüberprüfung weitergeleitet. Enthält Link-Protokollierung mit Statistikabfragen, automatischen Spam-Schutz mit optionalem Stummschalten und eine umfassende Sicherheitshärtung.
 
@@ -26,7 +26,9 @@ Ein Maubot-Plugin, das eingehende Nachrichten in Matrix-Räumen auf URLs scannt 
 
 **Moderationsworkflow** — Unbekannte Domains werden automatisch an einen konfigurierten Moderationsraum weitergeleitet. Moderatoren entscheiden dort per Emoji-Reaktion (✅ / ❌) oder Textbefehl. Die Entscheidung wird sofort aktiv und in der jeweiligen `custom.txt` gespeichert.
 
-**Link-Protokollierung & Statistiken (neu in v2.2)** — Alle nicht genehmigten (unbekannten) Links werden in einer plugin-eigenen Datenbank gespeichert. Wird ein Link freigegeben, wird er automatisch aus der Protokolldatenbank entfernt. Der Befehl `!stats` ermöglicht Administratoren die Abfrage der offenen Link-Anzahl pro Nutzer.
+**Link-Protokollierung & Statistiken** — Alle nicht genehmigten (unbekannten) Links werden in einer plugin-eigenen Datenbank gespeichert. Wird ein Link freigegeben, wird er automatisch aus der Protokolldatenbank entfernt. Der Befehl `!stats` ermöglicht Administratoren die Abfrage der offenen Link-Anzahl pro Nutzer.
+
+**Automatische Datenbankbereinigung (neu in v2.2.1)** — Ein nicht-blockierender Hintergrund-Task löscht periodisch veraltete Einträge aus der Link-Log-Datenbank. Interval und Aufbewahrungsdauer sind konfigurierbar. Der Task läuft einmal beim Bot-Start und danach alle 24 Stunden, ohne den Matrix-Sync-Loop zu beeinträchtigen.
 
 **Wildcard-Unterstützung** — Einträge wie `*.boese-seite.com` sperren alle Subdomains auf einmal. Funktioniert in Blacklist und Whitelist gleichermaßen.
 
@@ -72,6 +74,16 @@ Der folgende Befehl ist **ausschließlich** für Nutzer verfügbar, die explizit
 | `!stats <@nutzer:homeserver>` | Zeigt die Anzahl der aktuell protokollierten (noch nicht genehmigten) Links für den angegebenen Nutzer. Erwartet eine vollständige Matrix-ID im Format `@nutzer:homeserver`. |
 
 Beispiel: `!stats @alice:matrix.org`
+
+#### Wie `!stats` funktioniert
+
+Der Befehl liest aus der `link_log`-Datenbanktabelle, die der Bot intern pflegt:
+
+- **Eintrag entsteht**, wenn eine Nachricht eine unbekannte Domain enthält und der Nutzer die Nachricht zur Überprüfung eingereicht hat.
+- **Eintrag wird gelöscht**, sobald die Domain per `!allow` oder ✅-Reaktion genehmigt wird — automatisch, ohne manuellen Eingriff.
+- **Eintrag altert heraus**, wenn die automatische Bereinigung aktiv ist (`cleanup_enabled: true`) und der Eintrag älter als `cleanup_after_days` Tage ist.
+
+**Berechtigungsanforderung:** Der aufrufende Nutzer muss in `mod_permissions.allowed_users` (YAML-Array) eingetragen sein. Ein Powerlevel von 50+ im Mod-Raum allein genügt nicht. Die Matrix-ID muss im Format `@localpart:homeserver` angegeben werden — ungültige Formate werden mit einer Fehlermeldung abgelehnt.
 
 ### Emoji-Reaktionen im Moderationsraum
 
@@ -149,6 +161,15 @@ Diese Optionen werden in `base-config.yaml` definiert und können pro Instanz im
 | `warn_cooldown` | `60` | Warn-Cooldown in Sekunden. Nach einer Warnmeldung wartet der Bot diese Zeit, bevor er für denselben Nutzer eine neue Warnung postet. Nachrichten werden weiterhin sofort gelöscht — nur die öffentliche Benachrichtigung wird gedrosselt. |
 | `mute_enabled` | `false` | Automatisches Stummschalten aktivieren. Wenn `true`, wird ein Nutzer auf Powerlevel -1 gesetzt, sobald er `mute_threshold` Verstöße innerhalb von 5 Minuten angehäuft hat. Der Bot benötigt ein höheres Powerlevel als der Zielnutzer. |
 | `mute_threshold` | `5` | Anzahl der Verstöße innerhalb von 5 Minuten, die eine automatische Stummschaltung auslösen. |
+
+### Datenbank-Bereinigung (Link-Log)
+
+| Parameter | Standard | Beschreibung |
+|-----------|----------|-------------|
+| `cleanup_enabled` | `true` | Automatische Bereinigung des Link-Logs aktivieren. Wenn `true`, läuft beim Start und danach alle 24 Stunden ein nicht-blockierender Hintergrund-Task, der alte Einträge löscht. |
+| `cleanup_after_days` | `30` | Alter in Tagen, nach dem ein Link-Log-Eintrag gelöscht wird. Muss eine positive ganze Zahl sein. Empfohlen: 30–90. |
+
+> **Hinweis:** Die Bereinigung läuft vollständig nicht-blockierend im asyncio-Event-Loop und beeinflusst die Nachrichtenverarbeitung nicht. Der Cut-off-Zeitpunkt wird in Python berechnet und als parametrisierter Bindungsparameter übergeben — kein SQL-String-Zusammenbau, kompatibel mit PostgreSQL und SQLite.
 
 ### Leistungsoptimierung
 
@@ -301,6 +322,20 @@ Das aktualisierte `.mbp` im Maubot-Dashboard hochladen und die Instanz neu start
 ---
 
 ## Änderungsprotokoll
+
+### v2.2.1
+
+**Neues Feature: Automatische Datenbank-Bereinigung**
+- Neuer Hintergrund-Task `_cleanup_loop` / `_run_link_log_cleanup` — löscht periodisch veraltete `link_log`-Einträge.
+- Läuft einmalig beim Plugin-Start und danach im 24-Stunden-Takt via `asyncio.sleep` — kein Blocking des Matrix-Sync-Loops.
+- Cut-off-Zeitpunkt wird mit `datetime.timedelta` in Python berechnet und als `$1`-Parameter übergeben — 100% parametrisiert, keine datenbankspezifische `INTERVAL`-Syntax, kompatibel mit PostgreSQL und SQLite/aiosqlite.
+- Sauberes Lebenszyklusmanagement: `stop()` bricht den Task mit `cancel()` ab und wartet auf vollständige Beendigung.
+- Zwei neue Konfigurationsschlüssel in `base-config.yaml`: `cleanup_enabled` (bool) und `cleanup_after_days` (int).
+
+**Dokumentation**
+- README um dedizierte `!stats`-Erklärung erweitert (Berechtigungsmodell, Eintrag-Lebenszyklus).
+- Neue Konfigurationstabelle für Datenbank-Bereinigung.
+- Fehlerbehebungseintrag für `!stats`-Berechtigungsprobleme ergänzt.
 
 ### v2.2.0
 

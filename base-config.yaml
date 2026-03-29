@@ -1,5 +1,5 @@
 # =============================================================================
-# base-config.yaml — Standardkonfiguration (v2.1)
+# base-config.yaml — Standardkonfiguration (v2.2.1)
 # =============================================================================
 #
 # Diese Standardwerte können nach dem Erstellen einer Instanz im Maubot-Dashboard
@@ -106,3 +106,20 @@ mute_enabled: false
 
 # Anzahl der Verstöße innerhalb von 5 Minuten, die eine automatische Stummschaltung auslösen.
 mute_threshold: 5
+
+
+# -----------------------------------------------------------------------------
+# DATENBANK-BEREINIGUNG (Link-Log)
+# -----------------------------------------------------------------------------
+
+# Automatische Bereinigung des Link-Logs aktivieren (true/false).
+# Wenn true, löscht ein Hintergrund-Task periodisch alte Einträge aus der
+# link_log-Tabelle, die älter als `cleanup_after_days` Tage sind.
+# Die Bereinigung läuft einmal beim Start und danach alle 24 Stunden —
+# vollständig nicht-blockierend im asyncio-Event-Loop.
+cleanup_enabled: true
+
+# Alter (in Tagen), nach dem ein Link-Log-Eintrag automatisch gelöscht wird.
+# Gilt nur wenn cleanup_enabled = true.
+# Empfohlen: 30–90 Tage. Muss eine positive ganze Zahl sein.
+cleanup_after_days: 30
