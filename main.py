@@ -329,51 +329,50 @@ class URLFilterBot(Plugin):
         dann den Hochleistungs-Async-Listenlader. Der Matrix-Sync-Loop verarbeitet
         Ereignisse normal weiter, während das Parsen im Hintergrund in Threads läuft.
         """
-        await super().start()
-        self.config.load_and_update()
+        # ── Frühzeitige Initialisierung aller Handler-Attribute ──────────────
+        # KRITISCH: Diese Attribute MÜSSEN vor `await super().start()` stehen.
+        #
+        # GRUND: `super().start()` ist ein `await`-Punkt. Sobald die Kontrolle
+        # an den asyncio-Event-Loop abgegeben wird, kann der Matrix-Sync-Loop
+        # bereits Ereignisse liefern und `on_message` aufrufen — bevor `start()`
+        # die Zeilen danach erreicht. Das führt zu AttributeError auf `_seen_events`
+        # u.a., wie im Fehlerlog bei schnellem Spam sichtbar.
+        #
+        # Durch Vorab-Initialisierung sind alle Attribute garantiert vorhanden,
+        # egal wann der erste Handler eintrifft.
 
         # O(1)-Lookup-Sets — einmalig beim Start befüllt, bei Mod-Aktionen aktualisiert
         self.blacklist_set: Set[str] = set()
         self.whitelist_set: Set[str] = set()
 
         # Wildcard-Sets für "*.domain.com"-Muster aus den Listendateien.
-        # Speichern das Suffix nach Entfernung von "*.": "*.banned.com" → "banned.com".
-        # Die Prüfung erfolgt per endswith()-Schleife in _matches_wildcards().
         self.blacklist_wildcards: Set[str] = set()
         self.whitelist_wildcards: Set[str] = set()
 
         # Offene Moderationsanfragen: alert_event_id → PendingReview
         self.pending_reviews: Dict[EventID, PendingReview] = {}
 
-        # O(1)-Wächter: Domains, die bereits eine offene Überprüfung im Mod-Raum haben.
-        # Verhindert, dass der Bot N doppelte Alarme + 2N Reaktionen postet, wenn
-        # dieselbe unbekannte Domain mehrfach geteilt wird, bevor ein Mod entscheidet.
+        # O(1)-Wächter: Domains mit bereits offener Mod-Raum-Überprüfung
         self._pending_domains: Set[str] = set()
 
         # ── Event-ID-Deduplizierungs-Cache ────────────────────────────────────
-        # WARUM NÖTIG:
-        # Das Matrix-/sync-Protokoll kann Ereignisse, die während der Bot-Offline-Zeit
-        # ankamen, erneut zusenden (z.B. nach Neustart oder Netzwerkproblem). Ohne
-        # Seen-Event-Cache kann eine einzelne Nutzernachricht on_message() 2–3-mal
-        # auslösen und doppelte Hinweise sowie doppelte Mod-Raum-Alarme erzeugen.
-        #
-        # IMPLEMENTIERUNG:
         # _seen_events   — Set für O(1)-Mitgliedschaftsprüfung
         # _seen_events_q — Deque für O(1)-FIFO-Verdrängung bei vollem Cache
-        # Zusammen bilden sie einen gebundenen LRU-Cache ohne Drittanbieter-Bibliothek.
         self._seen_events: Set[EventID] = set()
         self._seen_events_q: Deque[EventID] = deque()
 
-        # Lock zur Serialisierung von custom.txt-Anhängen (siehe SELBSTAUDIT §2-C)
+        # Lock zur Serialisierung von custom.txt-Anhängen
         self._file_lock: asyncio.Lock = asyncio.Lock()
 
-        # Spam-Schutz: letzte Warn-Zeitstempel pro Nutzer (monotonic).
-        # Verhindert, dass der Bot bei Link-Spam den Raum mit Warnmeldungen flutet.
+        # Spam-Schutz: letzte Warn-Zeitstempel pro Nutzer (monotonic)
         self._warn_cooldowns: Dict[str, float] = {}
 
-        # Spam-Schutz: Liste der Verstoß-Zeitstempel pro Nutzer (monotonic).
-        # Einträge älter als 5 Minuten werden bei jedem Zugriff bereinigt.
+        # Spam-Schutz: Verstoß-Zeitstempel pro Nutzer (monotonic)
         self._violation_counts: Dict[str, List[float]] = {}
+
+        # ── Maubot-Basisklasse starten (gibt Kontrolle an asyncio ab) ─────────
+        await super().start()
+        self.config.load_and_update()
 
         # Dedizierter ThreadPoolExecutor, damit Datei-E/A nicht mit aiohttp
         # um den Standard-Executor konkurriert
