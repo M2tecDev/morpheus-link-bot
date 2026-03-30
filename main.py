@@ -1933,6 +1933,7 @@ class URLFilterBot(Plugin):
         mod_cfg      = self.config.get("mod_permissions", {})
         allowed_list = mod_cfg.get("allowed_users", [])
         min_level    = int(mod_cfg.get("min_power_level", 50))
+        mod_room     = str(self.config.get("mod_room_id", ""))
 
         # SICHERHEIT: Typprüfung — verhindert Teilstring-Vergleich falls
         # allowed_users versehentlich als String statt als Liste konfiguriert ist.
@@ -1946,6 +1947,9 @@ class URLFilterBot(Plugin):
                 type(allowed_list).__name__,
             )
             allowed_list = []
+
+        if not mod_room or room_id is None or str(room_id) != mod_room:
+            return False
 
         if str(user_id) in allowed_list:
             return True
