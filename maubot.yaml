@@ -5,7 +5,7 @@
 # PAKETIEREN:
 #   zip -r url_filter.mbp \
 #       maubot.yaml base-config.yaml main.py \
-#       blacklists/custom.txt whitelists/custom.txt
+#       blacklists/custom.txt blacklists/ignore.txt whitelists/custom.txt
 #
 # INSTALLIEREN:
 #   1. url_filter.mbp im Maubot-Dashboard hochladen
@@ -26,7 +26,7 @@ maubot: 0.4.0
 id: de.maubot.url_filter_bot
 
 name: URL Filter Bot
-version: 2.2.1
+version: 2.3.0
 license: AGPL-3.0-or-later
 description: >
   Scannt Matrix-Raumnachrichten auf URLs und prueft diese gegen konfigurierbare
@@ -56,5 +56,6 @@ database_type: asyncpg
 # The bot appends to these at runtime when mods approve/block domains.
 extra_files:
   - blacklists/custom.txt
+  - blacklists/ignore.txt
   - whitelists/custom.txt
   - base-config.yaml

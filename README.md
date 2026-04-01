@@ -1,4 +1,4 @@
-# URL-Filter-Bot für Matrix — v2.2.1
+# URL-Filter-Bot für Matrix — v2.3.0
 
 Ein Maubot-Plugin, das eingehende Nachrichten in Matrix-Räumen auf URLs scannt und diese gegen konfigurierbare Blacklists und Whitelists prüft. Unbekannte Links werden automatisch zur Moderatorenüberprüfung weitergeleitet. Enthält Link-Protokollierung mit Statistikabfragen, automatischen Spam-Schutz mit optionalem Stummschalten und eine umfassende Sicherheitshärtung.
 
@@ -27,6 +27,8 @@ Ein Maubot-Plugin, das eingehende Nachrichten in Matrix-Räumen auf URLs scannt 
 **Moderationsworkflow** — Unbekannte Domains werden automatisch an einen konfigurierten Moderationsraum weitergeleitet. Moderatoren entscheiden dort per Emoji-Reaktion (✅ / ❌) oder Textbefehl. Die Entscheidung wird sofort aktiv und in der jeweiligen `custom.txt` gespeichert.
 
 **Link-Protokollierung & Statistiken** — Alle nicht genehmigten (unbekannten) Links werden in einer plugin-eigenen Datenbank gespeichert. Wird ein Link freigegeben, wird er automatisch aus der Protokolldatenbank entfernt. Der Befehl `!stats` ermöglicht Administratoren die Abfrage der offenen Link-Anzahl pro Nutzer.
+
+**Befehlsraum-Einschränkung (neu in v2.3.0)** — Über den neuen Konfigurationsschlüssel `command_rooms` kann festgelegt werden, in welchen Räumen der Bot auf Befehle reagiert. Der Moderationsraum und Direktnachrichten sind immer erlaubt, unabhängig von dieser Liste.
 
 **Automatische Datenbankbereinigung (neu in v2.2.1)** — Ein nicht-blockierender Hintergrund-Task löscht periodisch veraltete Einträge aus der Link-Log-Datenbank. Interval und Aufbewahrungsdauer sind konfigurierbar. Der Task läuft einmal beim Bot-Start und danach alle 24 Stunden, ohne den Matrix-Sync-Loop zu beeinträchtigen.
 
@@ -63,7 +65,12 @@ Ein Nutzer gilt als Moderator, wenn sein Powerlevel im Moderationsraum mindesten
 | `!block <domain>` | Domain sofort blacklisten. Unterstützt Wildcards: `!block *.boese-seite.com` |
 | `!unblock <domain>` | Domain oder Wildcard-Eintrag aus der Blacklist entfernen (nur aus `custom.txt`). |
 | `!reloadlists` | Alle `.txt`-Dateien neu einlesen — kein Neustart nötig. Nützlich nach manuellen Änderungen. |
-| `!pending` | Zeigt alle Domains, die aktuell auf eine Moderationsentscheidung warten. |
+| `!pending` | Zeigt alle Domains, die aktuell auf eine Moderationsentscheidung warten — mit menschenlesbaren Zeitangaben (z.B. „10 Minuten", „2 Stunden"). |
+| `!sendpending` | Sendet alle offenen Überprüfungsalarme erneut in den Mod-Raum. Nützlich nach einem Bot-Neustart oder wenn Alarme verloren gegangen sind. |
+| `!mute <@nutzer:server> [-t Minuten]` | Nutzer manuell stummschalten (Powerlevel -1). Optionaler `-t`-Parameter setzt die Dauer in Minuten; ohne `-t` gilt `mute_duration_minutes`. Nur wenn `mute_commands_enabled: true`. |
+| `!unmute <@nutzer:server>` | Stummschaltung eines Nutzers manuell aufheben. Nur wenn `mute_commands_enabled: true`. |
+| `!ignore <domain>` | Domain zur Vorschau-Ignore-Liste hinzufügen — Nachrichten mit dieser Domain werden weiterhin gefiltert, aber keine Linkvorschau mehr erzeugt. |
+| `!unignore <domain>` | Domain von der Vorschau-Ignore-Liste entfernen. |
 
 ### Admin-Befehle (nur für `allowed_users`)
 
@@ -144,6 +151,7 @@ Diese Optionen werden in `base-config.yaml` definiert und können pro Instanz im
 | `mod_room_id` | *(Pflichtfeld)* | Matrix-Raum-ID des Moderationsraums (Format: `!xxx:homeserver`). |
 | `mod_permissions.min_power_level` | `50` | Mindest-Powerlevel für Moderationsaktionen. `100` = nur Admin, `0` = jeder. |
 | `mod_permissions.allowed_users` | `[]` | Nutzer-IDs mit fester Moderation- **und** `!stats`-Berechtigung, unabhängig vom Powerlevel. Muss ein YAML-Array sein. Beispiel: `["@alice:matrix.org"]` |
+| `command_rooms` | `[]` | Liste von Raum-IDs oder -Aliasen, in denen der Bot auf Befehle reagiert. Leer = keine Einschränkung. `mod_room_id` und DMs sind immer erlaubt. |
 
 > ⚠️ **Konfigurationshinweis:** `allowed_users` muss als YAML-Array angegeben werden (eckige Klammern). Eine einzelne ID als String (`allowed_users: "@alice:server"`) wird aus Sicherheitsgründen als ungültig behandelt und ignoriert — der Bot gibt eine Warnung ins Log aus.
 
@@ -159,8 +167,11 @@ Diese Optionen werden in `base-config.yaml` definiert und können pro Instanz im
 | Parameter | Standard | Beschreibung |
 |-----------|----------|-------------|
 | `warn_cooldown` | `60` | Warn-Cooldown in Sekunden. Nach einer Warnmeldung wartet der Bot diese Zeit, bevor er für denselben Nutzer eine neue Warnung postet. Nachrichten werden weiterhin sofort gelöscht — nur die öffentliche Benachrichtigung wird gedrosselt. |
-| `mute_enabled` | `false` | Automatisches Stummschalten aktivieren. Wenn `true`, wird ein Nutzer auf Powerlevel -1 gesetzt, sobald er `mute_threshold` Verstöße innerhalb von 5 Minuten angehäuft hat. Der Bot benötigt ein höheres Powerlevel als der Zielnutzer. |
-| `mute_threshold` | `5` | Anzahl der Verstöße innerhalb von 5 Minuten, die eine automatische Stummschaltung auslösen. |
+| `mute_enabled` | `false` | Automatisches Stummschalten aktivieren. Wenn `true`, wird ein Nutzer auf Powerlevel -1 gesetzt, sobald er `mute_threshold` Verstöße innerhalb des konfigurierten `mute_window_minutes`-Fensters angehäuft hat. Der Bot benötigt ein höheres Powerlevel als der Zielnutzer. |
+| `mute_threshold` | `5` | Anzahl der Verstöße innerhalb des Beobachtungsfensters, die eine automatische Stummschaltung auslösen. |
+| `mute_window_minutes` | `5` | Beobachtungsfenster (Minuten), innerhalb dessen Verstöße eines Nutzers gezählt werden. |
+| `mute_duration_minutes` | `60` | Dauer der automatischen Stummschaltung (Minuten). `0` = unbegrenzt. Ein Hintergrund-Task hebt die Stummschaltung nach Ablauf automatisch auf. |
+| `mute_commands_enabled` | `true` | Manuelle `!mute`- und `!unmute`-Befehle aktivieren. Auf `false` setzen, wenn mehrere Moderations-Bots gleichzeitig im Raum aktiv sind. Betrifft **nicht** das automatische Stummschalten. |
 
 ### Datenbank-Bereinigung (Link-Log)
 
@@ -194,7 +205,7 @@ Diese Optionen werden in `base-config.yaml` definiert und können pro Instanz im
 cd /pfad/zum/plugin
 zip -r url_filter.mbp \
     maubot.yaml base-config.yaml main.py \
-    blacklists/custom.txt whitelists/custom.txt
+    blacklists/custom.txt blacklists/ignore.txt whitelists/custom.txt
 ```
 
 ### Schritt 2 — Plugin hochladen
@@ -302,7 +313,7 @@ Nach Änderungen an den Quelldateien neu paketieren:
 ```bash
 zip -r url_filter.mbp \
     maubot.yaml base-config.yaml main.py \
-    blacklists/custom.txt whitelists/custom.txt
+    blacklists/custom.txt blacklists/ignore.txt whitelists/custom.txt
 ```
 
 Das aktualisierte `.mbp` im Maubot-Dashboard hochladen und die Instanz neu starten.
@@ -322,6 +333,38 @@ Das aktualisierte `.mbp` im Maubot-Dashboard hochladen und die Instanz neu start
 ---
 
 ## Änderungsprotokoll
+
+### v2.3.0
+
+**Sicherheitshärtung**
+- Fix #1: `_is_mod()` prüft Powerlevel ausschließlich im konfigurierten `mod_room_id` — DM-Eskalation durch Einladen des Bots in einen eigenen Raum mit erhöhten Rechten ist nicht mehr möglich.
+- Fix #5: `on_message` überspringt den URL-Filter vollständig, wenn eine Nachricht mit einem bekannten Bot-Befehlsnamen beginnt — verhindert unbeabsichtigte Filterung eigener Befehle.
+
+**Neue Befehle**
+- Fix #10: `!mute <@nutzer:server> [-t Minuten]` — manuelles Stummschalten mit optionaler Zeitangabe.
+- Fix #10: `!unmute <@nutzer:server>` — manuelle Entstummschaltung.
+- Fix #11: `!sendpending` — sendet alle offenen Überprüfungsalarme neu in den Mod-Raum.
+- `!ignore` / `!unignore` — Domain zur/von der Vorschau-Ignore-Liste hinzufügen/entfernen.
+
+**Neue Konfigurationsoptionen**
+- Fix #2: `command_rooms` — Liste erlaubter Befehlsräume; leer = keine Einschränkung.
+- Fix #8: `mute_window_minutes` — konfigurierbares Beobachtungsfenster für Verstöße (Standard: 5 Minuten).
+- Fix #8: `mute_duration_minutes` — Dauer der automatischen Stummschaltung; `0` = unbegrenzt.
+- Fix #18: `mute_commands_enabled` — manuelle `!mute`/`!unmute`-Befehle aktivieren/deaktivieren.
+
+**Verbesserungen**
+- Fix #3: `_edit_notice()` erzeugt spec-konformes `m.new_content`-Format mit Retry-Mechanismus.
+- Fix #4: `!allow`/`!block` räumen `pending_reviews` auf, inklusive Wildcard-Sweep.
+- Fix #6: `!allow`, `!block`, `!unallow`, `!unblock`, `!urlstatus` akzeptieren mehrere Domains gleichzeitig (Leerzeichen-getrennt).
+- Fix #7: Semikolon gilt als Domain-Trennzeichen — `1.com;2.com;3.com` wird korrekt in drei Domains aufgeteilt.
+- Fix #9: `!pending` zeigt menschenlesbare Wartezeiten („10 Minuten", „2 Stunden").
+- Fix #8: Auto-Unmute-Hintergrund-Task (`_auto_unmute_loop`) hebt abgelaufene Stummschaltungen automatisch auf.
+- Fix #12: Bearbeitete Nachrichten aktualisieren bestehende Linkvorschauen anstatt neue zu erstellen; Vorschauen werden als Reply gesendet.
+- Fix #13: Alle whitelisteten Links in einer Nachricht erhalten jeweils eine eigene Vorschau — inkl. Thread-Support.
+- Fix #14: Aufeinanderfolgende Punkte (z.B. `achso...ne`) werden nicht mehr als Domain erkannt.
+
+**Paketierung**
+- `blacklists/ignore.txt` als Seed-Datei in das `.mbp`-Archiv aufgenommen (`maubot.yaml` → `extra_files`).
 
 ### v2.2.1
 

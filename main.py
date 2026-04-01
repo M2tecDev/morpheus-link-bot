@@ -1,5 +1,5 @@
 """
-URL-Filter-Bot — Hochleistungsedition  (v2.2.1)
+URL-Filter-Bot — Hochleistungsedition  (v2.3.0)
 ============================================
 
 Designziele
@@ -18,8 +18,22 @@ Designziele
 5. **Threadsicheres Schreiben**: Ein einziges `asyncio.Lock` serialisiert alle Anhänge
    an die Runtime-`custom.txt`-Dateien.
 
-Siehe SELBSTAUDIT-Abschnitt (Abschnitt 21) am Ende dieser Datei für eine detaillierte
-Analyse von Speicherbedarf, Threadsicherheit, Fehlerbehandlung und Regex-Sicherheit.
+Änderungen v2.3.0 (14 Fixes)
+------------------------------
+Fix  #1  _is_mod() prüft Powerlevel nur noch im mod_room_id — DM-Eskalation unmöglich.
+Fix  #2  command_rooms-Konfiguration — Bot ignoriert Befehle in nicht-gelisteten Räumen.
+Fix  #3  _edit_notice() spec-konformes m.new_content-Format + Retry-Mechanismus.
+Fix  #4  !allow/!block räumen pending_reviews auf, inkl. Wildcard-Sweep.
+Fix  #5  on_message überspringt URL-Filter, wenn Nachricht mit '!' beginnt.
+Fix  #6  !allow/!block/!unallow/!unblock/!urlstatus akzeptieren mehrere Domains.
+Fix  #7  Semikolon gilt als Trenner — 1.com;2.com;3.com → 3 Domains erkannt.
+Fix  #8  Konfigurierbares Stummschaltfenster + automatisches Entstummen per asyncio-Task.
+Fix  #9  !pending zeigt menschenlesbare Zeiten ("10 Minuten", "2 Stunden").
+Fix #10  !mute / !unmute-Befehle mit optionalem -t-Parameter.
+Fix #11  !sendpending sendet alle offenen Alarme neu in den Mod-Raum.
+Fix #12  Bearbeitete Nachrichten aktualisieren bestehende Vorschau; Vorschauen als Reply.
+Fix #13  Alle whitelisteten Links in einer Nachricht erhalten eine eigene Vorschau.
+Fix #14  "achso...ne" wird nicht mehr als Domain erkannt (aufeinanderfolgende Punkte).
 
 Abhängigkeiten
 --------------
@@ -27,6 +41,9 @@ Abhängigkeiten
   mautrix   >= 0.20.0
   aiohttp   (mit maubot gebündelt)
   Python    >= 3.10
+
+Siehe SELBSTAUDIT-Abschnitt (Abschnitt 21) am Ende dieser Datei für eine detaillierte
+Analyse von Speicherbedarf, Threadsicherheit, Fehlerbehandlung und Regex-Sicherheit.
 
 Autor: Kori <korinator21@gmail.com>
 """
@@ -45,8 +62,8 @@ import re
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Deque, Dict, Generator, List, Optional, Set
-from urllib.parse import urlparse
+from typing import Deque, Dict, Generator, List, Optional, Set, Tuple
+from urllib.parse import unquote, urlparse
 
 # ===========================================================================
 # ABSCHNITT 2 — DRITTANBIETER-BIBLIOTHEKEN
@@ -70,6 +87,7 @@ from mautrix.types import (
     TextMessageEventContent,
     UserID,
 )
+from mautrix.api import Method as HTTPMethod, Path as APIPath
 from mautrix.util.async_db import UpgradeTable, Scheme
 from mautrix.util.config import BaseProxyConfig, ConfigUpdateHelper
 
@@ -117,10 +135,20 @@ from mautrix.util.config import BaseProxyConfig, ConfigUpdateHelper
 #   ' ( ) * + ,  — Sub-Trennzeichen
 #   ; = ? / # %  — Query, Fragment, Prozent-Kodierung
 #   [ ]          — IPv6-Klammern
+#
+# Fix #7: ';' wurde aus der Hauptzeichenklasse von _URL_RE entfernt.
+#   Vorher: [a-zA-Z0-9\-._~:@!$&'()*+,;=/?#%\[\]]+
+#   Nachher: [a-zA-Z0-9\-._~:@!$&'()*+,=/?#%\[\]]+
+#   Semikolons gelten jetzt als Trennzeichen. Das Lookbehind behält ';', sodass
+#   URLs, die mit ';' enden, sauber gestutzt werden.
+#
+# Fix #14: Aufeinanderfolgende Punkte werden in _extract_domains (Schritt 3) per
+#   Post-Match-Check `if ".." in candidate: continue` abgefangen — keine Änderung
+#   am Regex selbst nötig, bleibt ReDoS-sicher (O(n) String-Suche).
 
 _URL_RE: re.Pattern = re.compile(
     r"(?:https?://|www\.)"
-    r"[a-zA-Z0-9\-._~:@!$&'()*+,;=/?#%\[\]]+"
+    r"[a-zA-Z0-9\-._~:@!$&'()*+,=/?#%\[\]]+"
     r"(?<![.,;:!?\])])",
     re.ASCII | re.IGNORECASE,
 )
@@ -133,6 +161,22 @@ _SKIP_DOMAINS: frozenset = frozenset({
     "localhost", "broadcasthost", "local",
     "0.0.0.0", "127.0.0.1", "255.255.255.255",
     "ip6-localhost", "ip6-loopback",
+})
+
+# ---------------------------------------------------------------------------
+# BEKANNTE BOT-BEFEHLSNAMEN — Fix #5 (präzisiert)
+# ---------------------------------------------------------------------------
+# Wird in on_message verwendet, um echte Befehle vom URL-Filter auszunehmen.
+# WICHTIG: Diese Liste muss mit den @command.new()-Dekoratoren synchron gehalten
+# werden. Nur Nachrichten, bei denen das erste Token nach "!" in diesem Set liegt,
+# überspringen den URL-Filter. Nachrichten wie "!https://evil.com" oder
+# "!evil.com" beginnen zwar mit "!", sind aber KEINE Befehle und werden weiterhin
+# vollständig auf URLs geprüft.
+_BOT_COMMAND_NAMES: frozenset = frozenset({
+    "allow", "block", "unallow", "unblock",
+    "urlstatus", "reloadlists", "pending", "sendpending",
+    "mute", "unmute", "liststats", "hilfe", "stats",
+    "ignore", "unignore",
 })
 
 # Emoji-Schlüssel, die als Moderations-Reaktionsknöpfe im Mod-Raum verwendet werden
@@ -158,6 +202,13 @@ _COMMON_TLDS: frozenset = frozenset({
     "today", "center", "support", "tools", "email", "social", "chat", "game",
     "web", "pw", "cc", "tv", "mobi", "tel", "coop", "aero", "museum", "jobs",
     # Länder-TLDs (ccTLDs) — vollständige IANA-Liste der 2-Zeichen-Codes
+    "com", "net", "org", "info", "biz", "edu", "gov", "mil", "int", "name",
+    "io", "co", "app", "dev", "xyz", "online", "site", "club", "top", "pro",
+    "store", "shop", "tech", "live", "news", "media", "cloud", "link", "click",
+    "download", "win", "bid", "loan", "work", "space", "agency", "digital",
+    "network", "services", "solutions", "systems", "group", "global", "world",
+    "today", "center", "support", "tools", "email", "social", "chat", "game",
+    "web", "pw", "cc", "tv", "mobi", "tel", "coop", "aero", "museum", "jobs",
     "ac", "ad", "ae", "af", "ag", "ai", "al", "am", "ao", "aq", "ar", "as",
     "at", "au", "aw", "ax", "az", "ba", "bb", "bd", "be", "bf", "bg", "bh",
     "bi", "bj", "bm", "bn", "bo", "br", "bs", "bt", "bw", "by", "bz", "ca",
@@ -214,6 +265,7 @@ _HREF_RE: re.Pattern = re.compile(
 #   *  → Wildcard-Präfix aus Listendateien
 #   .  → Punkt-Präfix (Subdomain-Kontexte)
 #   @  → E-Mail-Adresse (user@example.com → "example.com" wird ignoriert)
+# Fix #14: aufeinanderfolgende Punkte werden im Aufrufer per Post-Match-Check abgefangen.
 _NAKED_DOMAIN_RE: re.Pattern = re.compile(
     r'(?<![/\w\-\*\.@])'
     r'([a-zA-Z0-9][a-zA-Z0-9\-\.]{1,200}[a-zA-Z0-9])'
@@ -236,7 +288,7 @@ _NAKED_DOMAIN_RE: re.Pattern = re.compile(
 # BEWUSST NICHT ABGEDECKT: # (Raum-Alias) und $ (Event-IDs), da '#' in URL-
 # Fragmenten vorkommt und '$' nur in alten Event-ID-Formaten. Der Lookbehind in
 # _NAKED_DOMAIN_RE enthält bereits '@', sodass direkt @-präfixierte Token schon
-# blockiert werden. Diese Regex entfernt das GESAMTE MXID-Token inkl. Homeserver.
+# blockiert werden. Diese Regex entfernt das GESAMTE MXID-TOKEN inkl. Homeserver.
 #
 # REDOS-SICHERHEIT:
 #   Alle Zeichenklassen sind nach oben begrenzt ({1,255}).
@@ -246,39 +298,101 @@ _MATRIX_ID_RE: re.Pattern = re.compile(
     re.ASCII,
 )
 
+# ---------------------------------------------------------------------------
+# MATRIX-TO-DEEPLINKS — Matrix-interne Mentions/Einladungen aus URL-Checks halten
+# ---------------------------------------------------------------------------
+# Matrix-Clients serialisieren Nutzer-Tags oft als matrix.to/#/...-Deep-Link,
+# z.B. [matrix.to](https://matrix.to/#/@alice:example.org).
+# Diese Links sind intern und sollen NICHT als externe URL gelten.
+_MATRIX_TO_MD_LINK_RE: re.Pattern = re.compile(
+    r'\[[^\]\n]{1,512}\]\(((?:https?://)?(?:www\.)?matrix\.to/#/[^\s)]{1,2048})\)',
+    re.ASCII | re.IGNORECASE,
+)
+
+_MATRIX_TO_TEXT_LINK_RE: re.Pattern = re.compile(
+    r'((?:https?://)?(?:www\.)?matrix\.to/#/[^\s<>()]{1,2048})',
+    re.ASCII | re.IGNORECASE,
+)
+
+
+def _looks_like_matrix_identifier(token: str) -> bool:
+    """
+    Erkennt Matrix-Bezeichner robust anhand ihrer Form, ohne eine "echte"
+    Domain/TLD im Homeserver-Teil vorauszusetzen.
+    """
+    token = unquote(token).strip().lstrip("/")
+    if not token:
+        return False
+
+    token = token.split("?", 1)[0]
+    if not token:
+        return False
+
+    sigil = token[0]
+    if sigil == "$":
+        return len(token) > 1
+    if sigil not in "@!#":
+        return False
+    return ":" in token[1:] and not token.endswith(":")
+
+
+def _is_matrix_to_deeplink(url: str) -> bool:
+    """
+    True für matrix.to-Links, deren Ziel eine Matrix-ID / Raum-ID / Alias ist.
+    """
+    candidate = url.strip()
+    if not candidate:
+        return False
+
+    if candidate.startswith("//"):
+        candidate = "https:" + candidate
+    elif not candidate.startswith(("http://", "https://")):
+        candidate = "https://" + candidate
+
+    try:
+        parsed = urlparse(candidate)
+    except Exception:
+        return False
+
+    host = (parsed.hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if host != "matrix.to":
+        return False
+
+    target = (parsed.fragment or parsed.path or "").strip()
+    target = unquote(target).lstrip("/")
+    if not target:
+        return False
+
+    first_segment = target.split("/", 1)[0].split("?", 1)[0]
+    return _looks_like_matrix_identifier(first_segment)
+
+
+def _strip_matrix_to_deeplinks(text: str) -> str:
+    """
+    Entfernt Matrix-interne matrix.to-Deep-Links aus Markdown- und Klartext-
+    Darstellungen, damit weder URL- noch Naked-Domain-Erkennung anschlagen.
+    """
+    def _md_replacer(match: re.Match) -> str:
+        return " " if _is_matrix_to_deeplink(match.group(1)) else match.group(0)
+
+    def _text_replacer(match: re.Match) -> str:
+        return " " if _is_matrix_to_deeplink(match.group(1)) else match.group(0)
+
+    text = _MATRIX_TO_MD_LINK_RE.sub(_md_replacer, text)
+    return _MATRIX_TO_TEXT_LINK_RE.sub(_text_replacer, text)
+
 
 # ===========================================================================
-# ABSCHNITT 4b — DATENBANK-MIGRATION (mautrix async_db UpgradeTable)
+# ABSCHNITT 4b — DATENBANK-MIGRATION
 # ===========================================================================
-#
-# Maubot übergibt diese Tabelle an die Datenbankschicht, bevor das Plugin
-# gestartet wird. Jede registrierte Funktion entspricht einer Schema-Version.
-# Die Versionsnummer wird automatisch aus der Registrierungsreihenfolge abgeleitet.
-# Das `scheme`-Argument erlaubt DB-spezifische SQL-Zweige (PostgreSQL vs. SQLite).
-#
-# WICHTIG: Dieses Objekt muss auf Modulebene definiert sein, damit
-# `get_db_upgrade_table()` es zurückgeben kann.
 
 upgrade_table = UpgradeTable()
 
 
 @upgrade_table.register(description="Initial link_log table")
 async def upgrade_v1(conn, scheme: Scheme) -> None:
-    """
-    Erstellt die link_log-Tabelle für die Protokollierung unbekannter URLs.
-
-    Spalten:
-      id        — Primärschlüssel (BIGSERIAL auf PG, INTEGER ROWID auf SQLite)
-      sender    — Matrix-User-ID der Person, die den Link gesendet hat
-      url       — Vollständige URL (oder konstruierte https://<domain> als Fallback)
-      domain    — Normalisierter Hostname (für effizientes Löschen bei Freigabe)
-      logged_at — Zeitstempel der Protokollierung (DB-seitig gesetzt)
-
-    SICHERHEITSHINWEIS:
-      Beide Branches verwenden vollständig statische SQL-Strings — keine
-      f-String-Interpolation, kein Nutzereingabefluss. Der `scheme`-Parameter
-      ist ein Enum-Wert aus dem mautrix-Datenbankframework, nicht benutzerkontrolliert.
-    """
     if scheme == Scheme.POSTGRES:
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS link_log (
@@ -290,8 +404,6 @@ async def upgrade_v1(conn, scheme: Scheme) -> None:
             )
         """)
     else:
-        # SQLite/aiosqlite: INTEGER PRIMARY KEY ist ein Alias für rowid,
-        # wird automatisch inkrementiert — kein AUTOINCREMENT-Schlüsselwort nötig.
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS link_log (
                 id        INTEGER   PRIMARY KEY,
@@ -308,18 +420,12 @@ async def upgrade_v1(conn, scheme: Scheme) -> None:
 # ===========================================================================
 
 class Config(BaseProxyConfig):
-    """
-    Kapselt mautrix BaseProxyConfig. do_update() wird aufgerufen, wenn ein Operator
-    die Instanzkonfiguration über das Maubot-Dashboard speichert. Es kopiert jeden
-    Schlüssel aus der neuen Konfiguration in die aktive Konfiguration und behält
-    die base-config-Standardwerte für fehlende Schlüssel bei.
-    """
-
     def do_update(self, helper: ConfigUpdateHelper) -> None:
         helper.copy("blacklist_dir")
         helper.copy("whitelist_dir")
         helper.copy("mod_room_id")
         helper.copy("mod_permissions")
+        helper.copy("command_rooms")          # Fix #2
         helper.copy("enable_link_previews")
         helper.copy("link_preview_timeout")
         helper.copy("loader_threads")
@@ -328,6 +434,9 @@ class Config(BaseProxyConfig):
         helper.copy("warn_cooldown")
         helper.copy("mute_enabled")
         helper.copy("mute_threshold")
+        helper.copy("mute_window_minutes")    # Fix #8
+        helper.copy("mute_duration_minutes")  # Fix #8
+        helper.copy("mute_commands_enabled")  # Fix #18
         helper.copy("cleanup_enabled")
         helper.copy("cleanup_after_days")
 
@@ -338,13 +447,7 @@ class Config(BaseProxyConfig):
 
 @dataclass
 class PendingReview:
-    """
-    Erfasst alle Kontextinformationen, die zur Auflösung einer Moderationsüberprüfung
-    benötigt werden.
-
-    Instanzen werden in URLFilterBot.pending_reviews gespeichert, indexiert nach der
-    EventID der eigenen Alarmmeldung des Bots im Moderationsraum.
-    """
+    """Erfasst alle Kontextinformationen für eine Moderationsüberprüfung."""
     domain:               str
     original_event_id:    EventID
     original_room_id:     RoomID
@@ -359,7 +462,7 @@ class LoadResult:
     """Rückgabewert des synchronen Datei-Parser-Workers pro Datei."""
     filename:          str
     domains:           Set[str]
-    wildcards:         Set[str]   # Subdomain-Wildcards: "*.banned.com" → "banned.com"
+    wildcards:         Set[str]
     lines_read:        int
     domains_accepted:  int
     wildcards_found:   int
@@ -394,13 +497,14 @@ class URLFilterBot(Plugin):
                           Zählt Verstöße innerhalb eines 5-Minuten-Fensters.
                           Auslöser für automatisches Stummschalten bei Überschreitung
                           von `mute_threshold`.
+      _active_mutes     — (user_id, room_id) → monotonic unmute_at  [Fix #8]
+      _unmute_task      — asyncio.Task für Auto-Entstummen           [Fix #8]
+      _preview_map      — str(original_event_id) → {domain → preview_event_id}  [Fix #12/#13]
       _cleanup_task     — asyncio.Task für den periodischen Datenbank-Bereinigungsloop.
                           None wenn cleanup_enabled = false oder DB nicht verfügbar.
                           Wird in stop() abgebrochen und sauber abgewartet.
     """
 
-    # Maximale Anzahl zu merkender Event-IDs für die Deduplizierung.
-    # Bei ca. 80 Byte pro ID sind 1.000 Einträge ≈ 80 KB — vernachlässigbar.
     _SEEN_EVENTS_MAX: int = 1_000
 
     # ------------------------------------------------------------------
@@ -413,8 +517,6 @@ class URLFilterBot(Plugin):
 
     @classmethod
     def get_db_upgrade_table(cls) -> UpgradeTable:
-        """Gibt die UpgradeTable für die plugin-eigene Datenbank zurück.
-        Maubot führt ausstehende Migrationen automatisch vor start() aus."""
         return upgrade_table
 
     async def start(self) -> None:
@@ -443,6 +545,9 @@ class URLFilterBot(Plugin):
         self.blacklist_wildcards: Set[str] = set()
         self.whitelist_wildcards: Set[str] = set()
 
+        # Domains für die KEINE Linkvorschau erstellt wird (ignore.txt)
+        self.ignore_preview_set: Set[str] = set()
+
         # Offene Moderationsanfragen: alert_event_id → PendingReview
         self.pending_reviews: Dict[EventID, PendingReview] = {}
 
@@ -463,6 +568,20 @@ class URLFilterBot(Plugin):
 
         # Spam-Schutz: Verstoß-Zeitstempel pro Nutzer (monotonic)
         self._violation_counts: Dict[str, List[float]] = {}
+
+        # Fix #8: Aktive Stummschaltungen  { (user_id, room_id) → unmute_at }
+        self._active_mutes: Dict[Tuple[str, str], float] = {}
+        self._unmute_task: Optional[asyncio.Task] = None
+
+        # Fix #12/#13: str(original_event_id) → {domain: preview_event_id}
+        # Jede Nachricht hat ein eigenes Dict aller ihrer Vorschauen.
+        # Beim Edit werden Domains gematcht; überschüssige Vorschauen werden gelöscht.
+        self._preview_map: Dict[str, Dict[str, EventID]] = {}
+
+        # Thread-Support: msg_key → thread_root_event_id
+        # Gespeichert wenn eine Vorschau für eine Nachricht in einem Thread erstellt wird.
+        # Wird beim Edit-Pfad genutzt, damit Folge-Vorschauen ebenfalls im Thread landen.
+        self._thread_map: Dict[str, str] = {}
 
         # Datenbank-Bereinigungsaufgabe — None bis nach dem Start initialisiert.
         # KRITISCH: Muss VOR super().start() deklariert werden, damit kein
@@ -497,6 +616,14 @@ class URLFilterBot(Plugin):
                 int(self.config.get("cleanup_after_days", 30)),
             )
 
+        # ── Auto-Entstumm-Loop  [Fix #8] ─────────────────────────────────────
+        # Läuft alle 30 Sekunden und hebt abgelaufene Stummschaltungen auf.
+        # Nur starten wenn mute_enabled, aber der Task prüft beim Wakeup erneut.
+        self._unmute_task = asyncio.get_event_loop().create_task(
+            self._auto_unmute_loop(),
+            name="urlfilter_unmute",
+        )
+
     async def stop(self) -> None:
         """Geordnetes Herunterfahren — gibt den Thread-Pool frei und bricht
         den Bereinigungsloop sauber ab."""
@@ -504,13 +631,15 @@ class URLFilterBot(Plugin):
         # cancel() schickt CancelledError an den nächsten await-Punkt im Task.
         # Das kurze `await` danach stellt sicher, dass der Task vollständig
         # beendet wurde, bevor wir den Event-Loop freigeben.
-        if self._cleanup_task is not None and not self._cleanup_task.done():
-            self._cleanup_task.cancel()
-            try:
-                await self._cleanup_task
-            except asyncio.CancelledError:
-                pass  # Erwartetes Ergebnis beim sauberen Abbruch
-            self._cleanup_task = None
+        for task_attr in ("_cleanup_task", "_unmute_task"):
+            task = getattr(self, task_attr, None)
+            if task is not None and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass  # Erwartetes Ergebnis beim sauberen Abbruch
+            setattr(self, task_attr, None)
 
         self._loader_pool.shutdown(wait=False, cancel_futures=True)
         await super().stop()
@@ -685,7 +814,9 @@ class URLFilterBot(Plugin):
         bl_dir = self.config["blacklist_dir"]
         wl_dir = self.config["whitelist_dir"]
 
-        bl_files = _list_txt_files(bl_dir)
+        # ignore.txt aus dem Blacklist-Verzeichnis explizit ausschließen —
+        # sie wird separat geladen und darf die Blacklist nicht beeinflussen.
+        bl_files = [f for f in _list_txt_files(bl_dir) if os.path.basename(f) != "ignore.txt"]
         wl_files = _list_txt_files(wl_dir)
 
         if not bl_files and not wl_files:
@@ -757,6 +888,26 @@ class URLFilterBot(Plugin):
             total_lines, elapsed,
         )
 
+        # ── ignore.txt separat laden (Vorschau-Ignore-Liste) ─────────────────
+        ignore_file = os.path.abspath(os.path.join(bl_dir, "ignore.txt"))
+        if os.path.isfile(ignore_file):
+            try:
+                ignore_result = await loop.run_in_executor(
+                    self._loader_pool, self._load_one_file, ignore_file, min_len, max_len
+                )
+                if isinstance(ignore_result, BaseException):
+                    self.log.error("Fehler beim Laden von ignore.txt: %s", ignore_result)
+                else:
+                    self.ignore_preview_set = ignore_result.domains
+                    self.log.info(
+                        "🔇 ignore.txt: %d Domains geladen (keine Vorschau).",
+                        len(self.ignore_preview_set),
+                    )
+            except Exception as exc:
+                self.log.error("Fehler beim Laden von ignore.txt: %s", exc)
+        else:
+            self.ignore_preview_set = set()
+
 
     # ===========================================================================
     # ABSCHNITT 9 — URL- UND DOMAIN-EXTRAKTION
@@ -768,61 +919,38 @@ class URLFilterBot(Plugin):
         formatted_body: Optional[str] = None,
     ) -> Set[str]:
         """
-        Extrahiert alle einzigartigen Domain-Strings aus einer Nachricht in
-        drei Schritten mit steigender Vollständigkeit und fallender Zuverlässigkeit.
+        Extrahiert alle einzigartigen Domain-Strings aus einer Nachricht.
 
-        SCHRITT 1 — formatted_body <a href> (zuverlässigste Quelle)
-        ─────────────────────────────────────────────────────────────
-        Wenn der Matrix-Client ein `formatted_body`-Feld mit HTML sendet, enthält
-        es <a href="...">-Tags für ALLE Inhalte, die der Client als Link erkannt
-        hat. Das sind: explizit eingetippte URLs, auto-verlinkte "nackte" Domains,
-        Markdown-Links usw. Da der Client selbst die Erkennung durchgeführt hat,
-        sind diese Treffer praktisch falsch-positiv-frei.
-        Übersprungene Schemata: mailto:, matrix:, mxc:, tel:, # (Anker), / (Pfad).
-
-        SCHRITT 2 — _URL_RE auf Klartext (http:// und www. Präfix)
-        ─────────────────────────────────────────────────────────────
-        Fängt vollständig qualifizierte URLs ab, die NICHT im formatted_body landen
-        (z.B. bei Clients ohne Auto-Link-Funktion oder reinen Text-Clients).
-        Überschneidungen mit Schritt 1 werden durch Set-Deduplication still entfernt.
-
-        SCHRITT 3 — _NAKED_DOMAIN_RE + TLD-Validierung (Falsch-Positiv-Schutz)
-        ─────────────────────────────────────────────────────────────────────────
-        Erkennt "nackte" Domains wie "bannedurl.com" ohne http:// oder www.-Präfix
-        im Klartext. Der _NAKED_DOMAIN_RE-Regex findet Domain-ähnliche Zeichenketten;
-        die TLD wird dann gegen _COMMON_TLDS validiert.
-        Beispiele:
-          "hallo.du"   → TLD "du" ∉ _COMMON_TLDS → IGNORIERT          ← kein Falsch-Positiv
-          "bannedurl.com" → TLD "com" ∈ _COMMON_TLDS → ERKANNT         ← korrekt
-          "user@example.com" → lookbehind blockiert @-Präfix → IGNORIERT ← kein E-Mail-FP
+        Fix #7: Semikolons in clean_body werden durch Leerzeichen ersetzt,
+                sodass "1.com;2.com;3.com" drei separate Domains liefert.
+        Fix #14: Aufeinanderfolgende Punkte werden per Post-Match-Check abgefangen
+                 (`if ".." in candidate: continue`) — keine Regex-Änderung nötig,
+                 bleibt ReDoS-sicher.
         """
         domains: Set[str] = set()
 
-        # ── Schritt 0: Matrix-IDs aus dem Klartext entfernen ──────────────────
-        # "@nutzer:homeserver" und "!raum:homeserver" aus `body` substituieren,
-        # bevor die Regex-Schritte 2 und 3 darauf angewendet werden.
-        # Ohne diesen Schritt würde z.B. der Homeserver-Teil von
-        # "@kori:koridev.tail183fd1.ts.net" als Domain "koridev.tail183fd1.ts.net"
-        # erkannt (weil ':' nicht im Lookbehind von _NAKED_DOMAIN_RE enthalten ist).
-        # Schritt 1 (formatted_body) ist nicht betroffen — hrefs enthalten keine MXIDs.
-        clean_body: str = _MATRIX_ID_RE.sub(" ", body)
+        # Schritt 0: Matrix-Deep-Links/Mentions entfernen, dann Matrix-IDs strippen.
+        scan_body: str = _strip_matrix_to_deeplinks(body)
+        clean_body: str = _MATRIX_ID_RE.sub(" ", scan_body)
+        clean_body = clean_body.replace(";", " ")  # Fix #7
+        url_scan_body = scan_body.replace(";", " ")
 
-        # ── Schritt 1: <a href> aus formatted_body ────────────────────────────
+        # Schritt 1: <a href> aus formatted_body
         if formatted_body:
             for href in _HREF_RE.findall(formatted_body):
                 href = href.strip()
-                # Nicht-HTTP-Schemata und relative Pfade überspringen
-                if href.startswith((
-                    "mailto:", "matrix:", "mxc:", "tel:", "xmpp:",
-                    "#", "/", "data:",
-                )):
+                if _is_matrix_to_deeplink(href):
+                    continue
+                if href.startswith(("mailto:", "matrix:", "mxc:", "tel:", "xmpp:", "#", "/", "data:")):
                     continue
                 try:
                     if href.startswith("//"):
                         href = "https:" + href
                     elif not href.startswith(("http://", "https://")):
                         href = "https://" + href
-                    host = urlparse(href).netloc.split(":")[0].lower()
+                    # Fix #15: urlparse().hostname statt .netloc.split(":")[0] —
+                    # korrekte Behandlung von Basic-Auth-URLs (https://user:pass@host/)
+                    host = (urlparse(href).hostname or "").lower()
                     if host.startswith("www."):
                         host = host[4:]
                     if host and "." in host:
@@ -830,11 +958,14 @@ class URLFilterBot(Plugin):
                 except Exception:
                     continue
 
-        # ── Schritt 2: _URL_RE auf Klartext (http://, www.) ──────────────────
-        for raw in _URL_RE.findall(clean_body):
+        # Schritt 2: _URL_RE auf Klartext
+        for raw in _URL_RE.findall(url_scan_body):
             try:
                 url = raw if raw.startswith("http") else "http://" + raw
-                host = urlparse(url).netloc.split(":")[0].lower()
+                if _is_matrix_to_deeplink(url):
+                    continue
+                # Fix #15: urlparse().hostname erkennt Basic-Auth-URLs korrekt
+                host = (urlparse(url).hostname or "").lower()
                 if host.startswith("www."):
                     host = host[4:]
                 if host and "." in host:
@@ -842,18 +973,19 @@ class URLFilterBot(Plugin):
             except Exception:
                 continue
 
-        # ── Schritt 3: _NAKED_DOMAIN_RE + TLD-Validierung ────────────────────
+        # Schritt 3: _NAKED_DOMAIN_RE + TLD-Validierung
         for candidate in _NAKED_DOMAIN_RE.findall(clean_body):
             candidate = candidate.lower()
+            # Fix #14: aufeinanderfolgende Punkte → Falsch-Positiv (z.B. "achso...ne")
+            if ".." in candidate:
+                continue
             if "." not in candidate:
                 continue
             last_dot = candidate.rfind(".")
             tld = candidate[last_dot + 1:]
             domain_part = candidate[:last_dot]
-            # TLD muss ausschließlich Buchstaben enthalten UND im bekannten Set sein
             if not tld.isalpha() or tld not in _COMMON_TLDS or not domain_part:
                 continue
-            # "www."-Präfix für konsistente Blacklist-Abgleichung entfernen
             final = candidate[4:] if candidate.startswith("www.") else candidate
             if final and "." in final:
                 domains.add(final)
@@ -866,21 +998,15 @@ class URLFilterBot(Plugin):
         domain: str,
         formatted_body: Optional[str] = None,
     ) -> Optional[str]:
-        """
-        Gibt die beste verfügbare URL für `domain` zurück — für Linkvorschau-Anfragen.
-
-        Suchreihenfolge (höchste Qualität zuerst):
-          1. Vollständige URL aus formatted_body <a href> (korrekte Schemata garantiert).
-          2. URL aus _URL_RE auf Klartext (http://, www.).
-          3. Konstruierte Fallback-URL: "https://{domain}" (für nackte Domains aus Schritt 3).
-        """
-        # Schritt 0: Matrix-IDs aus dem Klartext entfernen (konsistent mit _extract_domains)
-        clean_body: str = _MATRIX_ID_RE.sub(" ", body)
-
-        # Schritt 1: formatted_body hrefs
+        scan_body: str = _strip_matrix_to_deeplinks(body)
+        clean_body: str = _MATRIX_ID_RE.sub(" ", scan_body)
+        clean_body = clean_body.replace(";", " ")  # Fix #7 konsistenz
+        url_scan_body = scan_body.replace(";", " ")
         if formatted_body:
             for href in _HREF_RE.findall(formatted_body):
                 href = href.strip()
+                if _is_matrix_to_deeplink(href):
+                    continue
                 if href.startswith(("mailto:", "matrix:", "mxc:", "tel:", "#", "/")):
                     continue
                 try:
@@ -888,46 +1014,31 @@ class URLFilterBot(Plugin):
                         href = "https:" + href
                     elif not href.startswith(("http://", "https://")):
                         href = "https://" + href
-                    host = urlparse(href).netloc.split(":")[0].lower()
+                    # Fix #15: .hostname korrekte Basic-Auth-URL-Behandlung
+                    host = (urlparse(href).hostname or "").lower()
                     if host.startswith("www."):
                         host = host[4:]
                     if host == domain:
                         return href
                 except Exception:
                     continue
-
-        # Schritt 2: _URL_RE auf Klartext
-        for raw in _URL_RE.findall(clean_body):
+        for raw in _URL_RE.findall(url_scan_body):
             try:
                 url = raw if raw.startswith("http") else "http://" + raw
-                host = urlparse(url).netloc.split(":")[0].lower()
+                if _is_matrix_to_deeplink(url):
+                    continue
+                # Fix #15: .hostname korrekte Basic-Auth-URL-Behandlung
+                host = (urlparse(url).hostname or "").lower()
                 if host.startswith("www."):
                     host = host[4:]
                 if host == domain:
                     return url
             except Exception:
                 continue
-
-        # Schritt 3: Fallback — URL aus Domain konstruieren (für nackte Domains)
         return f"https://{domain}"
 
     @staticmethod
     def _matches_wildcards(domain: str, wildcards: Set[str]) -> bool:
-        """
-        Prüft, ob `domain` einem Wildcard-Muster *.suffix entspricht.
-
-        Speicherinhalt in `wildcards`: das Suffix OHNE "*."-Präfix.
-        Beispiel: Wildcard "*.banned.com" → wildcards enthält "banned.com".
-
-        Übereinstimmungsregel:
-          "sub.banned.com".endswith(".banned.com")  → True   ✓
-          "api.banned.com".endswith(".banned.com")  → True   ✓
-          "banned.com".endswith(".banned.com")      → False  ✓ (Root-Domain nicht betroffen)
-          "notbanned.com".endswith(".banned.com")   → False  ✓
-
-        Komplexität: O(k) wobei k = Anzahl der Wildcards.
-        In der Praxis klein (manuell gepflegte Einträge) — daher effizient genug.
-        """
         for suffix in wildcards:
             if domain.endswith("." + suffix):
                 return True
@@ -943,57 +1054,14 @@ class URLFilterBot(Plugin):
         """
         Einstiegspunkt für jede Raumnachricht.
 
-        Sicherheitsprüfungen (kurz-geschlossen in Reihenfolge der Güte):
-          • Eigene Nachrichten des Bots überspringen — verhindert Feedback-Schleifen.
-          • Nicht-TEXT-Nachrichtentypen überspringen — Bilder, Dateien, Reaktionen, etc.
-
-        Domain-Kategorisierung (einmaliger Durchlauf):
-          • whitelist_set wird ZUERST geprüft — explizites Erlauben gewinnt immer.
-          • blacklist_set wird danach geprüft.
-          • Keins von beiden → unbekannt.
-
-        Routing-Priorität (höchster Schweregrad zuerst):
-          1. Jede gesperrte Domain   → Nachricht löschen + Warnung ausgeben.
-          2. Jede unbekannte Domain  → Nachricht löschen + an Mod-Raum weiterleiten.
-          3. Alle Domains whitelisted → erlauben + optionale Markdown-Vorschau.
+        Fix #5: Nachrichten, die mit '!' beginnen, überspringen den URL-Filter.
+        Fix #12: Bearbeitete Nachrichten (m.replace) aktualisieren bestehende Vorschau.
+        Fix #13: Alle whitelisteten Domains erhalten eine eigene Linkvorschau.
         """
-        # ── Deduplizierungs-Wächter — MUSS die allererste Prüfung sein ────────
-        # WARUM ZUERST: Matrix-/sync kann dieselbe event_id mehrfach zusenden:
-        #   • Nach Bot-Neustart (Homeserver sendet Ereignisse seit letztem `since` erneut)
-        #   • Bei Rennbedingungen beim Plugin-Reload innerhalb von Maubot
-        #   • Bei Netzwerk-Reconnects, bevor das `since`-Token gespeichert ist
-        # Jedes davon lässt on_message() für dieselbe Nachricht 2–3-mal auslösen,
-        # was doppelte Hinweise und Mod-Raum-Alarme erzeugt ("Dreifach-Posting").
-        #
-        # Durch Prüfung der event_id VOR den Absender/Nachrichtentyp-Wächtern
-        # fangen wir auch den Randfall ab, wo eigene replayed Events des Bots
-        # andernfalls beim zweiten Zustellversuch mit veralteten Absenderfeldern
-        # die Absenderprüfung passieren würden.
-        #
-        # PRE-AWAIT-GARANTIE (asyncio-Rennbedingungssicherheit)
-        # ───────────────────────────────────────────────────────
-        # In asyncio wechselt der Coroutine-Kontext NUR bei `await`-Punkten.
-        # Alles von hier bis einschließlich _seen_events.add() ist 100% synchron
-        # (kein yield, kein await). Das bedeutet:
-        #
-        #   Falls dieselbe event_id zweimal schnell hintereinander ankommt (zwei
-        #   on_message()-Coroutinen back-to-back geplant), wird die erste immer
-        #   .add() erreichen, bevor die zweite das Set prüft.
-        #   Die zweite Coroutine sieht die event_id daher immer schon vorhanden
-        #   und kehrt sofort zurück.
-        #
-        # Es gibt KEIN Fenster zwischen der `if event_id in`-Prüfung und dem
-        # `.add()`-Aufruf, wo ein Kontextwechsel stattfinden könnte. Die
-        # Deduplizierung ist innerhalb des asyncio-Event-Loops atomar.
+        # ── Deduplizierungs-Wächter ───────────────────────────────────────────
         event_id = evt.event_id
         if event_id in self._seen_events:
-            self.log.debug("Duplikat: Bereits verarbeitetes Ereignis %s wird übersprungen.", event_id)
             return
-        # ← .add() und .append() passieren hier, VOR dem ersten `await` irgendwo
-        #   in dieser Coroutine. Alle nachfolgenden Zeilen bis zum ersten `await`
-        #   (innerhalb _handle_blacklisted / _handle_unknown / _post_link_preview)
-        #   sind ebenfalls synchron. Das Cache-Update ist garantiert für jede
-        #   gleichzeitig geplante Geschwister-Coroutine sofort sichtbar.
         self._seen_events.add(event_id)
         self._seen_events_q.append(event_id)
         if len(self._seen_events_q) > self._SEEN_EVENTS_MAX:
@@ -1007,12 +1075,93 @@ class URLFilterBot(Plugin):
             return
 
         body: str = evt.content.body or ""
-
-        # formatted_body enthält HTML-Markup (z.B. <a href="...">), wenn der
-        # Matrix-Client es gesendet hat (Format: "org.matrix.custom.html").
-        # Es ist die zuverlässigste Quelle für Link-Erkennung (Schritt 1 in
-        # _extract_domains). Bei Clients ohne Formatierung ist es None.
         formatted_body: Optional[str] = getattr(evt.content, "formatted_body", None) or None
+
+        # ── Fix #5 (präzisiert): Nur echte Bot-Befehle überspringen den URL-Filter ──
+        # Prüfung: beginnt die Nachricht mit "!" UND ist das erste Token danach
+        # ein bekannter Befehlsname aus _BOT_COMMAND_NAMES?
+        # Nur dann wird der URL-Scan übersprungen.
+        #
+        # WARUM NICHT einfach startswith("!")?
+        # "!https://evil.com" oder "!blacklisted.de" beginnen zwar mit "!", sind
+        # aber KEINE Befehle. Mit der alten Prüfung konnten Nutzer gesperrte Links
+        # durch ein vorangestelltes "!" am URL-Filter vorbeischmuggeln.
+        # Die neue Prüfung schließt diesen Bypass aus.
+        _body_stripped = body.strip()
+        if _body_stripped.startswith("!") and len(_body_stripped) > 1:
+            _cmd_token = _body_stripped[1:].split()[0].lower() if _body_stripped[1:].split() else ""
+            if _cmd_token in _BOT_COMMAND_NAMES:
+                return
+
+        # ── Fix #12: Edit-Erkennung ───────────────────────────────────────────
+        # Prüfen ob diese Nachricht eine Bearbeitung einer früheren Nachricht ist.
+        #
+        # WICHTIG — mautrix Auto-Swap & lazy RelatesTo-Property:
+        # mautrix tauscht bei Edit-Events (rel_type: m.replace) evt.content automatisch
+        # mit m.new_content aus, bevor on_message feuert. body/formatted_body sind
+        # daher bereits korrekt — eine manuelle Extraktion aus m.new_content ist
+        # überflüssig (entfernt).
+        #
+        # BUGFIX — lazy RelatesTo-Property:
+        # BaseMessageEventContent.relates_to ist eine @property, die bei _relates_to=None
+        # *immer* ein leeres RelatesTo()-Objekt erstellt (gibt nie None zurück).
+        # getattr(..., "relates_to", None) würde daher immer ein Objekt liefern, auch
+        # wenn gar kein m.relates_to im Event vorhanden war.
+        # → Stattdessen _relates_to direkt lesen (kein lazy-create),
+        #   mit raw-Dict-Fallback für den Fall dass mautrix _relates_to nicht setzt.
+        original_event_id: Optional[EventID] = None
+        # Thread-Support: thread_root_id wird für Nachrichten in Threads gesetzt,
+        # damit Vorschauen ebenfalls im Thread landen (m.thread Relation).
+        thread_root_id: Optional[str] = None
+        _rt = getattr(evt.content, "_relates_to", None)
+        if _rt is not None:
+            # Direkt aus dem deserialisierten RelatesTo-Objekt lesen
+            _rt_rel = getattr(_rt, "rel_type", None)
+            if _rt_rel == "m.replace":
+                original_event_id = getattr(_rt, "event_id", None) or None
+            elif _rt_rel == "m.thread":
+                # Neue Nachricht in einem Thread
+                _tid = getattr(_rt, "event_id", None)
+                if _tid:
+                    thread_root_id = str(_tid)
+        else:
+            # Fallback: rohes Content-Dict auslesen (falls mautrix _relates_to nicht gesetzt hat)
+            try:
+                _raw_rt = evt.content.serialize().get("m.relates_to") or {}
+                if _raw_rt.get("rel_type") == "m.replace":
+                    _eid = _raw_rt.get("event_id")
+                    original_event_id = EventID(_eid) if _eid else None
+                elif _raw_rt.get("rel_type") == "m.thread":
+                    _tid = _raw_rt.get("event_id")
+                    if _tid:
+                        thread_root_id = str(_tid)
+            except Exception:
+                pass
+
+        # Method 3: Raw-HTTP-API-Fallback ─────────────────────────────────────
+        # Für ältere mautrix-Versionen, die m.relates_to beim Auto-Swap NICHT
+        # zurückschreiben: deserialize_content() setzt dann _relates_to=None und
+        # serialize() enthält kein "m.relates_to". Einzige verlässliche Quelle
+        # ist die Homeserver-REST-API, die das Original-Event unverändert liefert.
+        # Dieser Pfad wird nur betreten, wenn Methods 1+2 nichts gefunden haben.
+        if not original_event_id:
+            try:
+                _raw_evt = await self.client.api.request(
+                    HTTPMethod.GET,
+                    APIPath.v3.rooms[evt.room_id].event[evt.event_id],
+                )
+                if isinstance(_raw_evt, dict):
+                    _rrt = (_raw_evt.get("content") or {}).get("m.relates_to") or {}
+                    if isinstance(_rrt, dict):
+                        if _rrt.get("rel_type") == "m.replace":
+                            _eid = _rrt.get("event_id")
+                            original_event_id = EventID(_eid) if _eid else None
+                        elif not thread_root_id and _rrt.get("rel_type") == "m.thread":
+                            _tid = _rrt.get("event_id")
+                            if _tid:
+                                thread_root_id = str(_tid)
+            except Exception:
+                pass
 
         domains = self._extract_domains(body, formatted_body)
         if not domains:
@@ -1023,9 +1172,6 @@ class URLFilterBot(Plugin):
         whitelisted: List[str] = []
 
         for domain in domains:
-            # Prüfreihenfolge: Whitelist (exakt) → Whitelist (Wildcard) → Blacklist (exakt)
-            # → Blacklist (Wildcard) → Unbekannt.
-            # Whitelist hat immer Vorrang, auch gegenüber einer gleichzeitigen Blacklist-Übereinstimmung.
             if (domain in self.whitelist_set
                     or self._matches_wildcards(domain, self.whitelist_wildcards)):
                 whitelisted.append(domain)
@@ -1042,42 +1188,84 @@ class URLFilterBot(Plugin):
         elif unknown:
             message_redacted = await self._handle_unknown(unknown, evt)
 
-        if (
-            not message_redacted
-            and whitelisted
-            and self.config["enable_link_previews"]
-        ):
-            for domain in whitelisted:
-                url = self._find_url_for_domain(body, domain, formatted_body)
-                if url:
-                    await self._post_link_preview(domain, url, evt.room_id)
+        # ── Fix #12 + #13: Vorschauen für whitelisted Domains ────────────────
+        # Neue Nachricht  → für jede whitelistete Domain eine Reply-Vorschau senden.
+        # Edit            → _update_previews_for_edit() übernimmt die komplette Logik:
+        #                   gleiche Domain → Vorschau bearbeiten,
+        #                   andere Domain  → vorhandene Vorschau mit neuem Inhalt überschreiben,
+        #                   mehr Links     → neue Vorschauen senden,
+        #                   weniger Links  → Überschuss-Vorschauen löschen (redact).
+        if not message_redacted and self.config["enable_link_previews"]:
+            reply_target_id = original_event_id if original_event_id else evt.event_id
+            msg_key = str(reply_target_id)
+
+            # Domains herausfiltern die auf der Vorschau-Ignore-Liste stehen
+            preview_domains = [d for d in whitelisted if d not in self.ignore_preview_set]
+
+            # ── Thread-Root für Edit-Pfad ermitteln ──────────────────────────
+            # Für neue Nachrichten ist thread_root_id bereits gesetzt (oben).
+            # Für Edits schauen wir zuerst in _thread_map (kein API-Call nötig),
+            # dann Fallback per API auf das Original-Event.
+            if original_event_id and thread_root_id is None:
+                thread_root_id = self._thread_map.get(msg_key)
+                if thread_root_id is None:
+                    try:
+                        _orig_raw = await self.client.api.request(
+                            HTTPMethod.GET,
+                            APIPath.v3.rooms[evt.room_id].event[original_event_id],
+                        )
+                        if isinstance(_orig_raw, dict):
+                            _orig_rt = (_orig_raw.get("content") or {}).get("m.relates_to") or {}
+                            if isinstance(_orig_rt, dict) and _orig_rt.get("rel_type") == "m.thread":
+                                _tid = _orig_rt.get("event_id")
+                                if _tid:
+                                    thread_root_id = str(_tid)
+                    except Exception:
+                        pass
+
+            if original_event_id:
+                # Edit-Pfad: volle Synchronisation alter ↔ neuer Vorschauen
+                await self._update_previews_for_edit(
+                    msg_key, preview_domains, body, formatted_body,
+                    evt.room_id, reply_target_id,
+                    thread_root_id=thread_root_id,
+                )
+            elif preview_domains:
+                # Neue Nachricht: alle whitelisteten Domains bekommen eine Vorschau
+                domain_map: Dict[str, EventID] = {}
+                for domain in preview_domains:
+                    url = self._find_url_for_domain(body, domain, formatted_body)
+                    if not url:
+                        continue
+                    new_preview_id = await self._post_link_preview(
+                        domain, url, evt.room_id,
+                        reply_to_event_id=reply_target_id,
+                        thread_root_id=thread_root_id,
+                    )
+                    if new_preview_id:
+                        domain_map[domain] = new_preview_id
+                if domain_map:
+                    self._preview_map[msg_key] = domain_map
+                    # Thread-Info speichern damit Edits später im selben Thread landen
+                    if thread_root_id:
+                        self._thread_map[msg_key] = thread_root_id
+                    # Preview-Map auf 500 Nachrichten begrenzen
+                    if len(self._preview_map) > 500:
+                        old_keys = list(self._preview_map.keys())[:100]
+                        for old_key in old_keys:
+                            del self._preview_map[old_key]
+                            self._thread_map.pop(old_key, None)
 
 
     # ===========================================================================
     # ABSCHNITT 11 — ROUTING-AKTIONSHANDLER
     # ===========================================================================
 
-    async def _handle_blacklisted(
-        self, domains: List[str], evt: MessageEvent
-    ) -> bool:
-        """
-        Behandelt Nachrichten mit mindestens einer gesperrten Domain.
-        Löscht die Nachricht immer sofort. Eine Warnmeldung im Raum wird nur
-        gepostet, wenn der Warn-Cooldown für diesen Nutzer abgelaufen ist
-        (verhindert Notification Flooding bei Link-Spam). Ist Mute aktiviert
-        und der Schwellenwert erreicht, wird der Nutzer stummgeschaltet.
-        Gibt True zurück, wenn das Löschen erfolgreich war.
-        """
-        # Nachricht immer sofort löschen — unabhängig vom Warn-Cooldown.
-        # HINWEIS: Der Löschgrund ist nur in den Maubot-/Homeserver-Logs sichtbar —
-        # er wird in keinem Standard-Matrix-Client den Raummitgliedern angezeigt.
+    async def _handle_blacklisted(self, domains: List[str], evt: MessageEvent) -> bool:
         redacted = await self._redact(
             evt.room_id, evt.event_id,
             reason=f"Gesperrte Domain(s): {', '.join(domains[:3])}",
         )
-
-        # Warn-Cooldown prüfen — Warnmeldung nur einmal pro Cooldown-Intervall posten.
-        # SICHERHEIT: Die Domain-Namen NICHT an Raummitglieder weitergeben.
         now = time.monotonic()
         cooldown = float(self.config.get("warn_cooldown", 60))
         if now - self._warn_cooldowns.get(evt.sender, 0.0) >= cooldown:
@@ -1087,29 +1275,14 @@ class URLFilterBot(Plugin):
                 f"⚠️ {evt.sender}: Deine Nachricht wurde entfernt, da sie einen gesperrten Link enthielt. "
                 f"Wende dich an einen Moderator, wenn du glaubst, dass dies ein Fehler ist.",
             )
-
-        # Verstoß erfassen und ggf. stummschalten.
         await self._handle_violation(evt.sender, evt.room_id)
-
         return redacted
 
-    async def _handle_unknown(
-        self, domains: List[str], evt: MessageEvent
-    ) -> bool:
-        """
-        Behandelt Nachrichten mit unbekannten (nicht gelisteten) Domains.
-        Löscht die Nachricht immer sofort. Eine Nutzermeldung wird nur gepostet,
-        wenn der Warn-Cooldown abgelaufen ist. Jede Domain wird einzeln an den
-        Mod-Raum zur Überprüfung weitergeleitet. Ist Mute aktiviert und der
-        Schwellenwert erreicht, wird der Nutzer stummgeschaltet.
-        Gibt True zurück, wenn das Löschen erfolgreich war.
-        """
+    async def _handle_unknown(self, domains: List[str], evt: MessageEvent) -> bool:
         redacted = await self._redact(
             evt.room_id, evt.event_id,
             reason="Unbekannte Domain(s) — ausstehende Moderatorenüberprüfung",
         )
-
-        # Warn-Cooldown prüfen.
         now = time.monotonic()
         cooldown = float(self.config.get("warn_cooldown", 60))
         if now - self._warn_cooldowns.get(evt.sender, 0.0) >= cooldown:
@@ -1120,39 +1293,28 @@ class URLFilterBot(Plugin):
                 f"und zur Überprüfung an die Moderatoren weitergeleitet. "
                 f"Du wirst benachrichtigt, sobald eine Entscheidung getroffen wurde.",
             )
-
-        # body / formatted_body für URL-Rekonstruktion und Link-Protokollierung
         _body: str = evt.content.body or ""
         _fmt:  Optional[str] = getattr(evt.content, "formatted_body", None) or None
-
         for domain in domains:
             await self._submit_for_review(domain, evt)
-            # Unbekannte URL in der Datenbank protokollieren (für !stats-Auswertung).
-            # Nur wenn die Datenbankinstanz verfügbar ist (database: true in maubot.yaml).
             if self.database is not None:
                 url = self._find_url_for_domain(_body, domain, _fmt)
                 await self._log_link(evt.sender, url or f"https://{domain}", domain)
-
-        # Verstoß erfassen und ggf. stummschalten.
         await self._handle_violation(evt.sender, evt.room_id)
-
         return redacted
 
     def _record_violation(self, sender: str) -> bool:
         """
-        Trägt einen neuen Verstoß für `sender` ein und gibt True zurück,
-        wenn der konfigurierte `mute_threshold` innerhalb des letzten
-        5-Minuten-Fensters erreicht oder überschritten wurde.
-
-        Einträge außerhalb des Fensters werden bei jedem Aufruf bereinigt,
-        sodass der Dict-Eintrag nie unbegrenzt wächst.
+        Fix #8: Verwendet jetzt mute_window_minutes aus der Konfiguration
+        statt des fest kodierten 5-Minuten-Fensters.
         """
         threshold: int = int(self.config.get("mute_threshold", 5))
         now = time.monotonic()
-        window = 300.0  # 5-Minuten-Beobachtungsfenster (fest)
+        # Fix #8: konfigurierbares Fenster statt fest kodierter 300 Sekunden
+        window_min = float(self.config.get("mute_window_minutes", 5))
+        window = window_min * 60.0
 
         timestamps = self._violation_counts.setdefault(sender, [])
-        # Alle Einträge, die älter als das Fenster sind, verwerfen.
         cutoff = now - window
         while timestamps and timestamps[0] < cutoff:
             timestamps.pop(0)
@@ -1160,113 +1322,249 @@ class URLFilterBot(Plugin):
         return len(timestamps) >= threshold
 
     async def _handle_violation(self, sender: str, room_id: RoomID) -> None:
-        """
-        Zentraler Aufrufer nach jedem Verstoß: Erfasst den Verstoß und
-        schaltet den Nutzer stummgeschaltet, wenn Mute aktiviert ist und
-        der Schwellenwert erreicht wurde.
-        """
         if not self.config.get("mute_enabled", False):
             return
         if self._record_violation(sender):
             muted = await self._mute_user(sender, room_id)
             if muted:
+                dur_min = int(self.config.get("mute_duration_minutes", 60))
+                dur_text = _format_age(dur_min * 60) if dur_min > 0 else "unbegrenzt"
                 await self._send_notice(
                     room_id,
-                    f"🔇 {sender} wurde wegen wiederholter Regelverstöße stummgeschaltet.",
+                    f"🔇 {sender} wurde wegen wiederholter Regelverstöße für {dur_text} stummgeschaltet.",
                 )
 
-    async def _mute_user(self, user_id: str, room_id: RoomID) -> bool:
+    async def _mute_user(self, user_id: str, room_id: RoomID, duration_minutes: Optional[int] = None) -> bool:
         """
-        Setzt das Powerlevel von `user_id` im Raum auf -1 (stummgeschaltet).
-
-        Ablauf:
-          1. Aktuellen Power-Level-State-Event abrufen.
-          2. Eintrag des Nutzers auf -1 setzen.
-          3. State-Event zurückschreiben.
-
-        Gibt True bei Erfolg zurück, False bei Fehler (vollständiger Traceback
-        landet im Maubot-Log). Schlägt fehl, wenn der Bot kein ausreichendes
-        Powerlevel hat, um die Berechtigungen des Zielnutzers zu ändern.
+        Fix #8: Setzt Powerlevel auf -1 und registriert den Zeitstempel für Auto-Entstummen.
+        duration_minutes=0 bedeutet unbegrenzt. None → aus Konfiguration lesen.
         """
+        if duration_minutes is None:
+            duration_minutes = int(self.config.get("mute_duration_minutes", 60))
         try:
-            pl_content = await self.client.get_state_event(
-                room_id, EventType.ROOM_POWER_LEVELS
-            )
+            pl_content = await self.client.get_state_event(room_id, EventType.ROOM_POWER_LEVELS)
             users: dict = pl_content.get("users", {})
             if users.get(user_id) == -1:
-                # Bereits stummgeschaltet — kein doppelter State-Event nötig.
-                return True
+                return True  # bereits stummgeschaltet
             users[user_id] = -1
             pl_content["users"] = users
-            await self.client.send_state_event(
-                room_id, EventType.ROOM_POWER_LEVELS, pl_content
-            )
-            self.log.info(
-                "Nutzer %s in Raum %s stummgeschaltet (Powerlevel -1).", user_id, room_id
-            )
+            await self.client.send_state_event(room_id, EventType.ROOM_POWER_LEVELS, pl_content)
+            self.log.info("Nutzer %s in Raum %s stummgeschaltet (PL -1).", user_id, room_id)
+            # Fix #8: Zeitstempel für Auto-Entstummen speichern
+            if duration_minutes and duration_minutes > 0:
+                unmute_at = time.monotonic() + duration_minutes * 60.0
+                self._active_mutes[(str(user_id), str(room_id))] = unmute_at
             return True
         except Exception:
             self.log.exception(
-                "Stummschalten von %s in %s fehlgeschlagen — "
-                "prüfen ob der Bot ein höheres Powerlevel als der Zielnutzer hat.",
-                user_id, room_id,
+                "Stummschalten von %s in %s fehlgeschlagen.", user_id, room_id
             )
             return False
 
-    async def _post_link_preview(
-        self, domain: str, url: str, room_id: RoomID
-    ) -> None:
+    async def _do_unmute_user(self, user_id: str, room_id: str) -> bool:
         """
-        Ruft OG-Metadaten ab und postet eine saubere Markdown-Vorschaubenachrichtigung.
-        Verwendet nur **Fettdruck** und > Blockzitate — wird in allen gängigen
-        Matrix-Clients korrekt angezeigt (Element, FluffyChat, Nheko, Cinny, SchildiChat).
+        Fix #8: Hebt die Stummschaltung auf (setzt PL von -1 zurück auf 0).
+        Entfernt den Eintrag aus _active_mutes. Gibt True bei Erfolg zurück.
+        """
+        self._active_mutes.pop((str(user_id), str(room_id)), None)
+        try:
+            pl_content = await self.client.get_state_event(room_id, EventType.ROOM_POWER_LEVELS)
+            users: dict = pl_content.get("users", {})
+            if users.get(user_id) not in (-1, None):
+                return True  # nicht (mehr) stummgeschaltet
+            # Expliziten Eintrag auf 0 setzen (Raumstandard)
+            users[user_id] = 0
+            pl_content["users"] = users
+            await self.client.send_state_event(room_id, EventType.ROOM_POWER_LEVELS, pl_content)
+            self.log.info("Nutzer %s in Raum %s entstummt (PL 0).", user_id, room_id)
+            return True
+        except Exception:
+            self.log.exception("Entstummen von %s in %s fehlgeschlagen.", user_id, room_id)
+            return False
+
+    async def _auto_unmute_loop(self) -> None:
+        """
+        Fix #8: Hintergrund-Task der alle 30 Sekunden abgelaufene Stummschaltungen aufhebt.
+        Läuft unabhängig von mute_enabled (schadet nicht wenn nichts in _active_mutes steht).
+        """
+        self.log.debug("Auto-Entstumm-Loop gestartet.")
+        while True:
+            await asyncio.sleep(30)
+            now = time.monotonic()
+            expired = [
+                (uid, rid) for (uid, rid), unmute_at in list(self._active_mutes.items())
+                if unmute_at <= now
+            ]
+            for user_id, room_id in expired:
+                success = await self._do_unmute_user(user_id, room_id)
+                if success:
+                    await self._send_notice(
+                        room_id,
+                        f"🔊 {user_id} wurde automatisch entstummt.",
+                    )
+
+    async def _post_link_preview(
+        self,
+        domain: str,
+        url: str,
+        room_id: RoomID,
+        reply_to_event_id: Optional[EventID] = None,
+        edit_preview_event_id: Optional[EventID] = None,
+        thread_root_id: Optional[str] = None,
+    ) -> Optional[EventID]:
+        """
+        Ruft OG-Metadaten ab und postet eine Markdown-Vorschaubenachrichtigung.
+
+        Fix #12: Wenn edit_preview_event_id gesetzt ist, wird die bestehende
+                 Vorschau bearbeitet statt eine neue zu senden.
+        Fix #12: Wenn reply_to_event_id gesetzt ist, wird die Vorschau als
+                 Matrix-Reply auf die Nutzernachricht gesendet.
+        Fix #13: Gibt EventID zurück, damit der Aufrufer das Mapping speichern kann.
+        Thread:  Wenn thread_root_id gesetzt ist, wird die Vorschau als Thread-Reply
+                 gesendet (m.relates_to rel_type: m.thread).
         """
         meta = await self._fetch_og_metadata(url)
         if not meta:
-            return
+            return None
         title = meta.get("title") or domain
         desc  = meta.get("description") or ""
         lines = [f"**{title}**"]
         if desc:
             lines.append(f"> {desc}")
         lines.append(f"[{domain}]({url})")
-        await self._send_notice(room_id, "\n".join(lines), render_markdown=True)
+        text = "\n".join(lines)
 
+        # Fix #12: bestehende Vorschau bearbeiten wenn vorhanden
+        if edit_preview_event_id:
+            await self._edit_notice(room_id, edit_preview_event_id, text)
+            return edit_preview_event_id  # unveränderte ID zurückgeben
+
+        # Fix #12: Vorschau als Reply auf Nutzernachricht senden
+        try:
+            html = _md_to_html(text)
+            content = TextMessageEventContent(
+                msgtype=MessageType.NOTICE,
+                body=text,
+                format=Format.HTML,
+                formatted_body=html,
+            )
+            # m.relates_to setzen:
+            # Thread-Nachricht → m.thread + m.in_reply_to kombinieren,
+            # damit die Vorschau im selben Thread landet.
+            # Normale Nachricht → nur m.in_reply_to (bisheriges Verhalten).
+            if reply_to_event_id:
+                if thread_root_id:
+                    content["m.relates_to"] = {
+                        "rel_type": "m.thread",
+                        "event_id": thread_root_id,
+                        "m.in_reply_to": {"event_id": str(reply_to_event_id)},
+                        "is_falling_back": False,
+                    }
+                else:
+                    content["m.relates_to"] = {
+                        "m.in_reply_to": {"event_id": str(reply_to_event_id)}
+                    }
+            return await self.client.send_message(room_id, content)
+        except Exception as exc:
+            self.log.error("Linkvorschau für '%s' fehlgeschlagen: %s", domain, exc)
+            return None
+
+
+    async def _update_previews_for_edit(
+        self,
+        msg_key: str,
+        new_domains: List[str],
+        body: str,
+        formatted_body: Optional[str],
+        room_id: RoomID,
+        reply_target_id: EventID,
+        thread_root_id: Optional[str] = None,
+    ) -> None:
+        """
+        Synchronisiert Bot-Vorschauen nach einem Nutzer-Edit.
+
+        Algorithmus (Reihenfolge wichtig):
+        1. Gleiche Domain → bestehende Vorschau in-place bearbeiten (kein neues Zitat).
+        2. Neue Domain, alte Vorschau frei → alte Vorschau mit neuem Inhalt überschreiben.
+        3. Mehr neue Domains als alte Vorschauen → fehlende Vorschauen neu senden.
+        4. Mehr alte Vorschauen als neue Domains → Überschuss-Vorschauen löschen (redact).
+
+        Damit wird gewährleistet:
+        - Domain wechselt (hass.com → deepl.com): 1 Edit, 0 neue Nachrichten.
+        - 3 Links → 1 Link: 1 Edit + 2 gelöschte Vorschauen, 0 neue Nachrichten.
+        - 1 Link → 3 Links: 1 Edit + 2 neue Vorschauen.
+        """
+        old_map: Dict[str, EventID] = dict(self._preview_map.get(msg_key, {}))
+        new_map: Dict[str, EventID] = {}
+        remaining_old: Dict[str, EventID] = dict(old_map)
+        deferred: List[str] = []  # neue Domains ohne direkten Same-Domain-Match
+
+        # Phase 1: Same-Domain-Matches — bevorzugte 1:1-Zuordnung
+        for domain in new_domains:
+            url = self._find_url_for_domain(body, domain, formatted_body)
+            if not url:
+                continue
+            if domain in remaining_old:
+                old_id = remaining_old.pop(domain)
+                result = await self._post_link_preview(
+                    domain, url, room_id,
+                    reply_to_event_id=reply_target_id,
+                    edit_preview_event_id=old_id,
+                    thread_root_id=thread_root_id,
+                )
+                new_map[domain] = result or old_id
+            else:
+                deferred.append(domain)
+
+        # Phase 2: Verbleibende neue Domains auf freie alte Vorschauen mappen
+        old_pool = list(remaining_old.items())  # [(domain, preview_id), ...]
+        reuse_idx = 0
+        for domain in deferred:
+            url = self._find_url_for_domain(body, domain, formatted_body)
+            if not url:
+                continue
+            if reuse_idx < len(old_pool):
+                _, old_id = old_pool[reuse_idx]
+                reuse_idx += 1
+                result = await self._post_link_preview(
+                    domain, url, room_id,
+                    reply_to_event_id=reply_target_id,
+                    edit_preview_event_id=old_id,
+                    thread_root_id=thread_root_id,
+                )
+                new_map[domain] = result or old_id
+            else:
+                # Mehr Links als vorher → neue Vorschau senden
+                result = await self._post_link_preview(
+                    domain, url, room_id,
+                    reply_to_event_id=reply_target_id,
+                    thread_root_id=thread_root_id,
+                )
+                if result:
+                    new_map[domain] = result
+
+        # Phase 3: Überschüssige alte Vorschauen löschen (weniger Links als vorher)
+        for _, old_id in old_pool[reuse_idx:]:
+            await self._redact(room_id, old_id,
+                               reason="Link aus bearbeiteter Nachricht entfernt")
+
+        # Map aktualisieren
+        if new_map:
+            self._preview_map[msg_key] = new_map
+        elif msg_key in self._preview_map:
+            del self._preview_map[msg_key]
 
     # ===========================================================================
     # ABSCHNITT 12 — MODERATIONSRAUM: PRÜFANFRAGE EINREICHEN
     # ===========================================================================
 
     async def _submit_for_review(self, domain: str, evt: MessageEvent) -> None:
-        """
-        Sendet eine strukturierte Benachrichtigung an den Mod-Raum für eine unbekannte Domain.
-
-        Der Alarm enthält Absender, Raum, Domain und Anweisungen für
-        sowohl Emoji-Reaktions- als auch befehlsbasierte Auflösung.
-
-        Der Bot reagiert sofort auf seinen eigenen Alarm mit ✅ und ❌, damit
-        Moderatoren direkt in der Timeline klicken können.
-
-        Die Überprüfung wird in pending_reviews BEVOR Reaktionen gepostet werden
-        registriert, um eine Rennbedingung zu vermeiden, bei der ein sehr schneller
-        Klick ankommt, bevor der Eintrag registriert ist.
-        """
         mod_room: str = self.config.get("mod_room_id", "")
         if not mod_room:
-            self.log.warning(
-                "mod_room_id nicht konfiguriert — '%s' kann nicht zur Überprüfung weitergeleitet werden.", domain
-            )
+            self.log.warning("mod_room_id nicht konfiguriert — '%s' kann nicht weitergeleitet werden.", domain)
             return
-
-        # ── Doppelter-Alarm-Wächter ───────────────────────────────────────────
-        # Wenn dieselbe Domain bereits auf eine Entscheidung im Mod-Raum wartet,
-        # keinen weiteren Alarm posten oder weitere Emoji-Reaktionen hinzufügen.
-        # Das verhindert, dass der Mod-Raum überflutet wird, wenn eine Domain
-        # wiederholt geteilt wird, während eine Überprüfung noch offen ist.
         if domain in self._pending_domains:
-            self.log.info(
-                "Domain '%s' hat bereits eine offene Überprüfung — doppelter Alarm wird übersprungen.", domain
-            )
+            self.log.info("Domain '%s' hat bereits eine offene Überprüfung — übersprungen.", domain)
             return
 
         alert_text = (
@@ -1277,10 +1575,9 @@ class URLFilterBot(Plugin):
             f"Reagiere mit {_EMOJI_ALLOW} zum **Whitelisten** oder {_EMOJI_BLOCK} zum **Blacklisten**.\n"
             f"Oder verwende: `!allow {domain}` / `!block {domain}`"
         )
-
         alert_id = await self._send_notice(mod_room, alert_text, render_markdown=True)
         if not alert_id:
-            self.log.error("Alarm für '%s' konnte nicht an den Mod-Raum gesendet werden.", domain)
+            self.log.error("Alarm für '%s' konnte nicht gesendet werden.", domain)
             return
 
         review = PendingReview(
@@ -1289,23 +1586,11 @@ class URLFilterBot(Plugin):
             original_room_id=evt.room_id,
             sender=evt.sender,
         )
-        # VOR dem Posten von Reaktionen registrieren (Rennbedingungssicherheit).
-        # Auch in _pending_domains registrieren, damit nachfolgende Nachrichten
-        # mit derselben Domain still übersprungen werden, anstatt den Mod-Raum zu fluten.
         self.pending_reviews[alert_id] = review
         self._pending_domains.add(domain)
-
-        review.whitelist_reaction_id = await self._send_reaction(
-            mod_room, alert_id, _EMOJI_ALLOW
-        )
-        review.blacklist_reaction_id = await self._send_reaction(
-            mod_room, alert_id, _EMOJI_BLOCK
-        )
-
-        self.log.info(
-            "Überprüfung eingereicht: domain='%s' absender=%s raum=%s alarm=%s",
-            domain, evt.sender, evt.room_id, alert_id,
-        )
+        review.whitelist_reaction_id = await self._send_reaction(mod_room, alert_id, _EMOJI_ALLOW)
+        review.blacklist_reaction_id = await self._send_reaction(mod_room, alert_id, _EMOJI_BLOCK)
+        self.log.info("Überprüfung eingereicht: domain='%s' sender=%s", domain, evt.sender)
 
 
     # ===========================================================================
@@ -1314,383 +1599,422 @@ class URLFilterBot(Plugin):
 
     @event.on(EventType.REACTION)
     async def on_reaction(self, evt: MessageEvent) -> None:
-        """
-        Verarbeitet m.reaction-Ereignisse im Mod-Raum.
-
-        Kurz-Schluss-Prüfungen (günstigste zuerst):
-          1. Eigene Reaktionen des Bots ignorieren (die ✅/❌-Schaltflächen, die er postet).
-          2. Reaktionen außerhalb des Mod-Raums ignorieren.
-          3. Nicht-annotation rel_types ignorieren.
-          4. Reaktionen auf Ereignisse, die nicht in pending_reviews stehen, ignorieren.
-          5. Moderationsberechtigungen prüfen.
-          6. Auf Emoji-Schlüssel reagieren.
-        """
         if evt.sender == self.client.mxid:
             return
         if evt.room_id != self.config.get("mod_room_id", ""):
             return
-
         relates_to = getattr(evt.content, "relates_to", None)
         if relates_to is None:
             return
-        if str(getattr(relates_to, "rel_type", "")) != "m.annotation":
+        # BUGFIX: Direktvergleich ohne str() — selbe Ursache wie in on_message
+        if getattr(relates_to, "rel_type", None) != "m.annotation":
             return
-
         target_id = getattr(relates_to, "event_id", None)
         emoji_key = getattr(relates_to, "key", None)
-
         review = self.pending_reviews.get(target_id)
         if not review:
             return
-
         if not await self._is_mod(evt.sender, evt.room_id):
-            self.log.info(
-                "Moderationsaktion für %s auf Domain '%s' verweigert (unzureichende Berechtigungen).",
-                evt.sender, review.domain,
-            )
             return
-
         if emoji_key == _EMOJI_ALLOW:
             await self._execute_allow(review, target_id, evt.sender)
         elif emoji_key == _EMOJI_BLOCK:
             await self._execute_block(review, target_id, evt.sender)
-        # Andere Emojis auf unseren Alarm werden still ignoriert
 
 
     # ===========================================================================
     # ABSCHNITT 14 — MODERATIONSAUSFÜHRUNG
     # ===========================================================================
 
-    async def _execute_allow(
-        self,
-        review: PendingReview,
-        alert_id: EventID,
-        mod_user: UserID,
-    ) -> None:
-        """
-        Genehmigt eine Domain:
-          1. In whitelists/custom.txt persistieren (Datei zuerst für Konsistenz).
-          2. In-Memory-Sets aktualisieren.
-          3. Aus pending_reviews entfernen.
-          4. Mod-Raum-Alarm zur Anzeige der Auflösung bearbeiten.
-          5. Originalraum benachrichtigen.
-        """
+    async def _execute_allow(self, review: PendingReview, alert_id: EventID, mod_user: UserID) -> None:
         domain  = review.domain
         wl_file = os.path.abspath(os.path.join(self.config["whitelist_dir"], "custom.txt"))
-
         try:
             await self._append_to_file(domain, wl_file)
         except PermissionError:
-            # Vollständiger Traceback bereits in den Maubot-Logs via self.log.exception()
-            await self._send_notice(
-                self.config["mod_room_id"],
-                f"❌ **Zugriff verweigert:** Der Bot kann nicht in `{wl_file}` schreiben.\n\n"
-                f"Bitte prüfe die Docker-Volume-Berechtigungen.\n"
-                f"Führe auf dem Docker-Host aus:\n"
-                f"```\nchown -R 1337:1337 ./data/whitelists ./data/blacklists\n```\n"
-                f"(Maubot läuft standardmäßig als UID 1337 im Docker-Container.)",
-            )
+            await self._send_notice(self.config["mod_room_id"],
+                f"❌ **Zugriff verweigert:** Kann nicht in `{wl_file}` schreiben.\n"
+                f"```\nchown -R 1337:1337 ./data/whitelists ./data/blacklists\n```")
             return
         except Exception as exc:
-            await self._send_notice(
-                self.config["mod_room_id"],
-                f"❌ **Schreibfehler (Whitelist):** `{domain}` konnte nicht gespeichert werden.\n"
-                f"Pfad: `{wl_file}`\n"
-                f"Fehler: `{type(exc).__name__}: {exc}`\n"
-                f"Vollständiger Traceback in den Maubot-Logs.",
-            )
+            await self._send_notice(self.config["mod_room_id"],
+                f"❌ **Schreibfehler (Whitelist):** `{domain}` — `{type(exc).__name__}: {exc}`")
             return
 
         self.whitelist_set.add(domain)
         self.blacklist_set.discard(domain)
         self.pending_reviews.pop(alert_id, None)
-        self._pending_domains.discard(domain)   # Bei Bedarf für zukünftige Überprüfungen wieder öffnen
-
-        # Alle protokollierten (noch nicht genehmigten) Einträge für diese Domain löschen.
+        self._pending_domains.discard(domain)
         if self.database is not None:
             await self._delete_logged_links_for_domain(domain)
-
-        await self._edit_notice(
-            self.config["mod_room_id"],
-            alert_id,
-            f"✅ **Whitelisted** von {mod_user}\nDomain `{domain}` ist jetzt erlaubt.",
-        )
-        await self._send_notice(
-            review.original_room_id,
+        await self._edit_notice(self.config["mod_room_id"], alert_id,
+            f"✅ **Whitelisted** von {mod_user}\nDomain `{domain}` ist jetzt erlaubt.")
+        await self._send_notice(review.original_room_id,
             f"✅ Der Link zu `{domain}` (gesendet von {review.sender}) wurde von den Moderatoren "
-            f"**genehmigt**. Du kannst deine Nachricht erneut senden.",
-        )
-        self.log.info("Domain '%s' von %s auf die Whitelist gesetzt.", domain, mod_user)
+            f"**genehmigt**. Du kannst deine Nachricht erneut senden.")
+        self.log.info("Domain '%s' von %s whitelisted.", domain, mod_user)
 
-    async def _execute_block(
-        self,
-        review: PendingReview,
-        alert_id: EventID,
-        mod_user: UserID,
-    ) -> None:
-        """
-        Sperrt eine Domain:
-          1. In blacklists/custom.txt persistieren.
-          2. In-Memory-Sets aktualisieren.
-          3. Aus pending_reviews entfernen.
-          4. Mod-Raum-Alarm bearbeiten.
-          5. Originalraum benachrichtigen.
-        """
+    async def _execute_block(self, review: PendingReview, alert_id: EventID, mod_user: UserID) -> None:
         domain  = review.domain
         bl_file = os.path.abspath(os.path.join(self.config["blacklist_dir"], "custom.txt"))
-
         try:
             await self._append_to_file(domain, bl_file)
         except PermissionError:
-            await self._send_notice(
-                self.config["mod_room_id"],
-                f"❌ **Zugriff verweigert:** Der Bot kann nicht in `{bl_file}` schreiben.\n\n"
-                f"Bitte prüfe die Docker-Volume-Berechtigungen.\n"
-                f"Führe auf dem Docker-Host aus:\n"
-                f"```\nchown -R 1337:1337 ./data/whitelists ./data/blacklists\n```\n"
-                f"(Maubot läuft standardmäßig als UID 1337 im Docker-Container.)",
-            )
+            await self._send_notice(self.config["mod_room_id"],
+                f"❌ **Zugriff verweigert:** Kann nicht in `{bl_file}` schreiben.\n"
+                f"```\nchown -R 1337:1337 ./data/whitelists ./data/blacklists\n```")
             return
         except Exception as exc:
-            await self._send_notice(
-                self.config["mod_room_id"],
-                f"❌ **Schreibfehler (Blacklist):** `{domain}` konnte nicht gespeichert werden.\n"
-                f"Pfad: `{bl_file}`\n"
-                f"Fehler: `{type(exc).__name__}: {exc}`\n"
-                f"Vollständiger Traceback in den Maubot-Logs.",
-            )
+            await self._send_notice(self.config["mod_room_id"],
+                f"❌ **Schreibfehler (Blacklist):** `{domain}` — `{type(exc).__name__}: {exc}`")
             return
 
         self.blacklist_set.add(domain)
         self.whitelist_set.discard(domain)
         self.pending_reviews.pop(alert_id, None)
-        self._pending_domains.discard(domain)   # Jetzt auf Blacklist — keine weitere Überprüfung nötig
-
-        await self._edit_notice(
-            self.config["mod_room_id"],
-            alert_id,
-            f"❌ **Blacklisted** von {mod_user}\nDomain `{domain}` ist jetzt gesperrt.",
-        )
-        await self._send_notice(
-            review.original_room_id,
-            f"🚫 Ein Link gesendet von {review.sender} wurde von den Moderatoren "
-            f"**gesperrt**.",
-        )
-        self.log.info("Domain '%s' von %s auf die Blacklist gesetzt.", domain, mod_user)
+        self._pending_domains.discard(domain)
+        await self._edit_notice(self.config["mod_room_id"], alert_id,
+            f"❌ **Blacklisted** von {mod_user}\nDomain `{domain}` ist jetzt gesperrt.")
+        await self._send_notice(review.original_room_id,
+            f"🚫 Ein Link gesendet von {review.sender} wurde von den Moderatoren **gesperrt**.")
+        self.log.info("Domain '%s' von %s blacklisted.", domain, mod_user)
 
 
     # ===========================================================================
     # ABSCHNITT 15 — BEFEHLSHANDLER
     # ===========================================================================
 
-    @command.new("allow", help="[Mod] Domain whitelisten. Verwendung: !allow <domain> oder !allow *.domain.com")
-    @command.argument("domain", pass_raw=True, required=True)
-    async def cmd_allow(self, evt: MessageEvent, domain: str) -> None:
-        """!allow <domain> — Domain manuell whitelisten. Wildcards (*.domain.com) werden unterstützt."""
-        domain = _clean_domain_arg(domain)
-        if not _valid_domain(domain):
-            await evt.reply(
-                "❌ Verwendung: `!allow <domain>` oder `!allow *.domain.com`\n"
-                "Beispiele: `!allow example.com` · `!allow *.trusted-cdn.net`"
-            )
+    # ---------------------------------------------------------------------------
+    # Gemeinsamer Gate-Check für alle Befehlshandler
+    # ---------------------------------------------------------------------------
+
+    async def _is_allowed_command_room(self, room_id: RoomID) -> bool:
+        """
+        Fix #2: Gibt True zurück wenn Befehle in diesem Raum erlaubt sind.
+
+        Logik:
+          1. Keine command_rooms konfiguriert → alle Räume erlaubt.
+          2. mod_room_id → immer erlaubt.
+          3. Raum ist in command_rooms → erlaubt.
+          4. DM (2 Mitglieder: Bot + 1 Nutzer) → erlaubt.
+          5. Sonst → verweigert (Bot ignoriert Befehl still).
+        """
+        command_rooms = self.config.get("command_rooms", [])
+        if not command_rooms:
+            return True
+        mod_room = str(self.config.get("mod_room_id", ""))
+        if str(room_id) == mod_room:
+            return True
+        allowed = [str(r) for r in command_rooms]
+        if str(room_id) in allowed:
+            return True
+        # DM-Prüfung
+        try:
+            members = await self.client.get_joined_members(room_id)
+            if len(members) == 2:
+                return True
+        except Exception:
+            pass
+        return False
+
+    # ---------------------------------------------------------------------------
+    # !allow  [Fix #4: pending sync + wildcard sweep, Fix #6: multi-domain]
+    # ---------------------------------------------------------------------------
+
+    @command.new("allow", help="[Mod] Domain(s) whitelisten. Verwendung: !allow <domain> [domain2 ...]")
+    @command.argument("domains_raw", pass_raw=True, required=True)
+    async def cmd_allow(self, evt: MessageEvent, domains_raw: str) -> None:
+        if not await self._is_allowed_command_room(evt.room_id):
             return
         if not await self._is_mod(evt.sender, evt.room_id):
             await evt.reply("❌ Du hast keine Berechtigung, Domains zu whitelisten.")
             return
-        wl_file = os.path.abspath(os.path.join(self.config["whitelist_dir"], "custom.txt"))
-        is_wildcard = domain.startswith("*.")
-        suffix = domain[2:] if is_wildcard else None
-        try:
-            await self._append_to_file(domain, wl_file)
-            if is_wildcard:
-                self.whitelist_wildcards.add(suffix)
-                self.blacklist_wildcards.discard(suffix)
-            else:
-                self.whitelist_set.add(domain)
-                self.blacklist_set.discard(domain)
-            # Alle protokollierten Einträge für diese Domain aus dem Link-Log löschen.
-            if self.database is not None:
-                await self._delete_logged_links_for_domain(domain)
-            await evt.reply(f"✅ `{domain}` wurde zur Whitelist hinzugefügt.")
-            self.log.info("'%s' manuell von %s auf die Whitelist gesetzt.", domain, evt.sender)
-        except PermissionError:
-            await evt.reply(
-                f"❌ **Zugriff verweigert:** Kein Schreibzugriff auf `{wl_file}`.\n"
-                f"Bitte prüfe die Docker-Volume-Berechtigungen:\n"
-                f"`chown -R 1337:1337 ./data/whitelists ./data/blacklists`"
-            )
-        except Exception as exc:
-            await evt.reply(
-                f"❌ Schreibfehler (`{type(exc).__name__}`): `{exc}`\n"
-                f"Pfad: `{wl_file}` — Vollständiger Traceback in den Maubot-Logs."
-            )
 
-    @command.new("block", help="[Mod] Domain blacklisten. Verwendung: !block <domain> oder !block *.domain.com")
-    @command.argument("domain", pass_raw=True, required=True)
-    async def cmd_block(self, evt: MessageEvent, domain: str) -> None:
-        """!block <domain> — Domain manuell blacklisten. Wildcards (*.domain.com) werden unterstützt."""
-        domain = _clean_domain_arg(domain)
-        if not _valid_domain(domain):
-            await evt.reply(
-                "❌ Verwendung: `!block <domain>` oder `!block *.domain.com`\n"
-                "Beispiele: `!block malware.example.com` · `!block *.phishing-netz.de`"
-            )
+        # Fix #6: alle Domains aus dem Argument extrahieren
+        domain_list = _split_domain_args(domains_raw)
+        if not domain_list:
+            await evt.reply("❌ Verwendung: `!allow <domain>` oder `!allow domain1.com domain2.com`")
+            return
+
+        wl_file = os.path.abspath(os.path.join(self.config["whitelist_dir"], "custom.txt"))
+        results: List[str] = []
+
+        for domain in domain_list:
+            if not _valid_domain(domain):
+                results.append(f"❌ `{domain}` — ungültige Domain")
+                continue
+            is_wildcard = domain.startswith("*.")
+            suffix = domain[2:] if is_wildcard else None
+            # Fix #17: Duplikat-Prüfung — Domain bereits auf der Whitelist?
+            if (is_wildcard and suffix in self.whitelist_wildcards) or \
+               (not is_wildcard and domain in self.whitelist_set):
+                results.append(f"ℹ️ `{domain}` ist bereits auf der Whitelist")
+                continue
+            try:
+                await self._append_to_file(domain, wl_file)
+                if is_wildcard:
+                    self.whitelist_wildcards.add(suffix)
+                    self.blacklist_wildcards.discard(suffix)
+                else:
+                    self.whitelist_set.add(domain)
+                    self.blacklist_set.discard(domain)
+                if self.database is not None:
+                    await self._delete_logged_links_for_domain(domain)
+                results.append(f"✅ `{domain}` zur Whitelist hinzugefügt")
+                self.log.info("'%s' manuell von %s whitelisted.", domain, evt.sender)
+
+                # Fix #4: Pending-Reviews für diese Domain (oder passende Subdomains) aufräumen
+                await self._resolve_pending_for_domain(domain, is_whitelist=True, mod_user=evt.sender)
+
+            except PermissionError:
+                results.append(f"❌ `{domain}` — Zugriff verweigert auf `{wl_file}`")
+            except Exception as exc:
+                results.append(f"❌ `{domain}` — Fehler: `{type(exc).__name__}: {exc}`")
+
+        await evt.reply("\n".join(results))
+
+    # ---------------------------------------------------------------------------
+    # !block  [Fix #4, Fix #6]
+    # ---------------------------------------------------------------------------
+
+    @command.new("block", help="[Mod] Domain(s) blacklisten. Verwendung: !block <domain> [domain2 ...]")
+    @command.argument("domains_raw", pass_raw=True, required=True)
+    async def cmd_block(self, evt: MessageEvent, domains_raw: str) -> None:
+        if not await self._is_allowed_command_room(evt.room_id):
             return
         if not await self._is_mod(evt.sender, evt.room_id):
             await evt.reply("❌ Du hast keine Berechtigung, Domains zu blacklisten.")
             return
+
+        domain_list = _split_domain_args(domains_raw)
+        if not domain_list:
+            await evt.reply("❌ Verwendung: `!block <domain>` oder `!block domain1.com domain2.com`")
+            return
+
         bl_file = os.path.abspath(os.path.join(self.config["blacklist_dir"], "custom.txt"))
+        results: List[str] = []
+
+        for domain in domain_list:
+            if not _valid_domain(domain):
+                results.append(f"❌ `{domain}` — ungültige Domain")
+                continue
+            is_wildcard = domain.startswith("*.")
+            suffix = domain[2:] if is_wildcard else None
+            # Fix #17: Duplikat-Prüfung — Domain bereits auf der Blacklist?
+            if (is_wildcard and suffix in self.blacklist_wildcards) or \
+               (not is_wildcard and domain in self.blacklist_set):
+                results.append(f"ℹ️ `{domain}` ist bereits auf der Blacklist")
+                continue
+            try:
+                await self._append_to_file(domain, bl_file)
+                if is_wildcard:
+                    self.blacklist_wildcards.add(suffix)
+                    self.whitelist_wildcards.discard(suffix)
+                else:
+                    self.blacklist_set.add(domain)
+                    self.whitelist_set.discard(domain)
+                results.append(f"🚫 `{domain}` zur Blacklist hinzugefügt")
+                self.log.info("'%s' manuell von %s blacklisted.", domain, evt.sender)
+
+                # Fix #4: Pending-Reviews aufräumen
+                await self._resolve_pending_for_domain(domain, is_whitelist=False, mod_user=evt.sender)
+
+            except PermissionError:
+                results.append(f"❌ `{domain}` — Zugriff verweigert auf `{bl_file}`")
+            except Exception as exc:
+                results.append(f"❌ `{domain}` — Fehler: `{type(exc).__name__}: {exc}`")
+
+        await evt.reply("\n".join(results))
+
+    async def _resolve_pending_for_domain(
+        self, domain: str, is_whitelist: bool, mod_user: str
+    ) -> None:
+        """
+        Fix #4: Räumt pending_reviews für eine Domain (oder deren Subdomains bei Wildcard) auf.
+
+        Bei !allow example.com:   bereinigt pending entries für genau "example.com"
+        Bei !allow *.example.com: bereinigt pending entries für alle Subdomains von example.com
+        Bei !block:               analog, aber sendet die Blocked-Meldung
+        """
         is_wildcard = domain.startswith("*.")
         suffix = domain[2:] if is_wildcard else None
-        try:
-            await self._append_to_file(domain, bl_file)
-            if is_wildcard:
-                self.blacklist_wildcards.add(suffix)
-                self.whitelist_wildcards.discard(suffix)
-            else:
-                self.blacklist_set.add(domain)
-                self.whitelist_set.discard(domain)
-            await evt.reply(f"🚫 `{domain}` wurde zur Blacklist hinzugefügt.")
-            self.log.info("'%s' manuell von %s auf die Blacklist gesetzt.", domain, evt.sender)
-        except PermissionError:
-            await evt.reply(
-                f"❌ **Zugriff verweigert:** Kein Schreibzugriff auf `{bl_file}`.\n"
-                f"Bitte prüfe die Docker-Volume-Berechtigungen:\n"
-                f"`chown -R 1337:1337 ./data/whitelists ./data/blacklists`"
-            )
-        except Exception as exc:
-            await evt.reply(
-                f"❌ Schreibfehler (`{type(exc).__name__}`): `{exc}`\n"
-                f"Pfad: `{bl_file}` — Vollständiger Traceback in den Maubot-Logs."
-            )
+        mod_room = str(self.config.get("mod_room_id", ""))
 
-    @command.new("unallow", help="[Mod] Domain aus der Whitelist entfernen. Verwendung: !unallow <domain>")
-    @command.argument("domain", pass_raw=True, required=True)
-    async def cmd_unallow(self, evt: MessageEvent, domain: str) -> None:
-        """
-        !unallow <domain> — Entfernt eine Domain (oder Wildcard) aus der Whitelist.
-        Ändert nur whitelists/custom.txt — große externe Listendateien bleiben unberührt.
-        Erfordert Moderationsberechtigungen.
-        """
-        domain = _clean_domain_arg(domain)
-        if not _valid_domain(domain):
-            await evt.reply("❌ Verwendung: `!unallow <domain>` oder `!unallow *.domain.com`")
+        # Snapshot der aktuellen Reviews (wir mutieren das Dict während der Iteration)
+        to_resolve: List[Tuple[EventID, PendingReview]] = []
+        for alert_id, review in list(self.pending_reviews.items()):
+            if is_wildcard:
+                # Wildcard *.example.com trifft sub.example.com, api.example.com usw.
+                if review.domain.endswith("." + suffix):
+                    to_resolve.append((alert_id, review))
+            else:
+                if review.domain == domain:
+                    to_resolve.append((alert_id, review))
+
+        for alert_id, review in to_resolve:
+            self.pending_reviews.pop(alert_id, None)
+            self._pending_domains.discard(review.domain)
+            # Mod-Raum-Alarm aktualisieren
+            if mod_room:
+                if is_whitelist:
+                    await self._edit_notice(mod_room, alert_id,
+                        f"✅ **Whitelisted** von {mod_user} (Befehl)\nDomain `{review.domain}` ist jetzt erlaubt.")
+                else:
+                    await self._edit_notice(mod_room, alert_id,
+                        f"❌ **Blacklisted** von {mod_user} (Befehl)\nDomain `{review.domain}` ist jetzt gesperrt.")
+            # Originalraum benachrichtigen
+            if is_whitelist:
+                await self._send_notice(
+                    review.original_room_id,
+                    f"✅ Der Link zu `{review.domain}` (gesendet von {review.sender}) wurde von den Moderatoren "
+                    f"**genehmigt**. Du kannst deine Nachricht erneut senden.",
+                )
+            else:
+                await self._send_notice(
+                    review.original_room_id,
+                    f"🚫 Ein Link gesendet von {review.sender} wurde von den Moderatoren **gesperrt**.",
+                )
+
+    # ---------------------------------------------------------------------------
+    # !unallow  [Fix #6: multi-domain]
+    # ---------------------------------------------------------------------------
+
+    @command.new("unallow", help="[Mod] Domain(s) aus der Whitelist entfernen.")
+    @command.argument("domains_raw", pass_raw=True, required=True)
+    async def cmd_unallow(self, evt: MessageEvent, domains_raw: str) -> None:
+        if not await self._is_allowed_command_room(evt.room_id):
             return
         if not await self._is_mod(evt.sender, evt.room_id):
             await evt.reply("❌ Du hast keine Berechtigung, Domains aus der Whitelist zu entfernen.")
             return
+        domain_list = _split_domain_args(domains_raw)
+        if not domain_list:
+            await evt.reply("❌ Verwendung: `!unallow <domain>` [domain2 ...]")
+            return
         wl_file = os.path.abspath(os.path.join(self.config["whitelist_dir"], "custom.txt"))
-        is_wildcard = domain.startswith("*.")
-        suffix = domain[2:] if is_wildcard else None
-        try:
-            await self._remove_from_file(domain, wl_file)
-            if is_wildcard:
-                self.whitelist_wildcards.discard(suffix)
-            else:
-                self.whitelist_set.discard(domain)
-            # BUG-FIX: {domain} wird hier als Variable interpoliert,
-            # NICHT als wörtlicher String "domain" ausgegeben.
-            await evt.reply(f"✅ `{domain}` wurde erfolgreich aus der Whitelist entfernt.")
-            self.log.info("'%s' aus der Whitelist entfernt von %s.", domain, evt.sender)
-        except PermissionError:
-            await evt.reply(
-                f"❌ **Zugriff verweigert:** Kein Schreibzugriff auf `{wl_file}`.\n"
-                f"Bitte prüfe die Docker-Volume-Berechtigungen:\n"
-                f"`chown -R 1337:1337 ./data/whitelists ./data/blacklists`"
-            )
-        except Exception as exc:
-            await evt.reply(
-                f"❌ Fehler beim Entfernen von `{domain}` (`{type(exc).__name__}`): `{exc}`\n"
-                f"Pfad: `{wl_file}` — Vollständiger Traceback in den Maubot-Logs."
-            )
+        results: List[str] = []
+        for domain in domain_list:
+            if not _valid_domain(domain):
+                results.append(f"❌ `{domain}` — ungültige Domain")
+                continue
+            is_wildcard = domain.startswith("*.")
+            suffix = domain[2:] if is_wildcard else None
+            try:
+                await self._remove_from_file(domain, wl_file)
+                if is_wildcard:
+                    self.whitelist_wildcards.discard(suffix)
+                else:
+                    self.whitelist_set.discard(domain)
+                results.append(f"✅ `{domain}` aus der Whitelist entfernt")
+                self.log.info("'%s' aus Whitelist entfernt von %s.", domain, evt.sender)
+            except PermissionError:
+                results.append(f"❌ `{domain}` — Zugriff verweigert auf `{wl_file}`")
+            except Exception as exc:
+                results.append(f"❌ `{domain}` — Fehler: `{type(exc).__name__}: {exc}`")
+        await evt.reply("\n".join(results))
 
-    @command.new("unblock", help="[Mod] Domain aus der Blacklist entfernen. Verwendung: !unblock <domain>")
-    @command.argument("domain", pass_raw=True, required=True)
-    async def cmd_unblock(self, evt: MessageEvent, domain: str) -> None:
-        """
-        !unblock <domain> — Entfernt eine Domain (oder Wildcard) aus der Blacklist.
-        Ändert nur blacklists/custom.txt — große externe Listendateien bleiben unberührt.
-        Erfordert Moderationsberechtigungen.
-        """
-        domain = _clean_domain_arg(domain)
-        if not _valid_domain(domain):
-            await evt.reply("❌ Verwendung: `!unblock <domain>` oder `!unblock *.domain.com`")
+    # ---------------------------------------------------------------------------
+    # !unblock  [Fix #6: multi-domain]
+    # ---------------------------------------------------------------------------
+
+    @command.new("unblock", help="[Mod] Domain(s) aus der Blacklist entfernen.")
+    @command.argument("domains_raw", pass_raw=True, required=True)
+    async def cmd_unblock(self, evt: MessageEvent, domains_raw: str) -> None:
+        if not await self._is_allowed_command_room(evt.room_id):
             return
         if not await self._is_mod(evt.sender, evt.room_id):
             await evt.reply("❌ Du hast keine Berechtigung, Domains aus der Blacklist zu entfernen.")
             return
-        bl_file = os.path.abspath(os.path.join(self.config["blacklist_dir"], "custom.txt"))
-        is_wildcard = domain.startswith("*.")
-        suffix = domain[2:] if is_wildcard else None
-        try:
-            await self._remove_from_file(domain, bl_file)
-            if is_wildcard:
-                self.blacklist_wildcards.discard(suffix)
-            else:
-                self.blacklist_set.discard(domain)
-            # BUG-FIX: {domain} wird hier als Variable interpoliert,
-            # NICHT als wörtlicher String "domain" ausgegeben.
-            await evt.reply(f"✅ `{domain}` wurde erfolgreich aus der Blacklist entfernt.")
-            self.log.info("'%s' aus der Blacklist entfernt von %s.", domain, evt.sender)
-        except PermissionError:
-            await evt.reply(
-                f"❌ **Zugriff verweigert:** Kein Schreibzugriff auf `{bl_file}`.\n"
-                f"Bitte prüfe die Docker-Volume-Berechtigungen:\n"
-                f"`chown -R 1337:1337 ./data/whitelists ./data/blacklists`"
-            )
-        except Exception as exc:
-            await evt.reply(
-                f"❌ Fehler beim Entfernen von `{domain}` (`{type(exc).__name__}`): `{exc}`\n"
-                f"Pfad: `{bl_file}` — Vollständiger Traceback in den Maubot-Logs."
-            )
-
-    @command.new("urlstatus", help="Aktuellen Richtlinienstatus einer Domain prüfen.")
-    @command.argument("domain", pass_raw=True, required=True)
-    async def cmd_status(self, evt: MessageEvent, domain: str) -> None:
-        """!urlstatus <domain> — Gibt aus ob eine Domain whitelisted / blacklisted / unbekannt ist (inkl. Wildcards)."""
-        domain = _clean_domain_arg(domain)
-        if not _valid_domain(domain):
-            await evt.reply("❌ Verwendung: `!urlstatus <domain>`")
+        domain_list = _split_domain_args(domains_raw)
+        if not domain_list:
+            await evt.reply("❌ Verwendung: `!unblock <domain>` [domain2 ...]")
             return
-        if domain in self.whitelist_set:
-            await evt.reply(f"✅ `{domain}` ist **whitelisted** (exakter Eintrag).")
-        elif self._matches_wildcards(domain, self.whitelist_wildcards):
-            await evt.reply(f"✅ `{domain}` ist **whitelisted** (Wildcard-Treffer).")
-        elif domain in self.blacklist_set:
-            await evt.reply(f"🚫 `{domain}` ist **blacklisted** (exakter Eintrag).")
-        elif self._matches_wildcards(domain, self.blacklist_wildcards):
-            await evt.reply(f"🚫 `{domain}` ist **blacklisted** (Wildcard-Treffer).")
-        else:
-            await evt.reply(f"❓ `{domain}` ist **unbekannt** (auf keiner Liste).")
+        bl_file = os.path.abspath(os.path.join(self.config["blacklist_dir"], "custom.txt"))
+        results: List[str] = []
+        for domain in domain_list:
+            if not _valid_domain(domain):
+                results.append(f"❌ `{domain}` — ungültige Domain")
+                continue
+            is_wildcard = domain.startswith("*.")
+            suffix = domain[2:] if is_wildcard else None
+            try:
+                await self._remove_from_file(domain, bl_file)
+                if is_wildcard:
+                    self.blacklist_wildcards.discard(suffix)
+                else:
+                    self.blacklist_set.discard(domain)
+                results.append(f"✅ `{domain}` aus der Blacklist entfernt")
+                self.log.info("'%s' aus Blacklist entfernt von %s.", domain, evt.sender)
+            except PermissionError:
+                results.append(f"❌ `{domain}` — Zugriff verweigert auf `{bl_file}`")
+            except Exception as exc:
+                results.append(f"❌ `{domain}` — Fehler: `{type(exc).__name__}: {exc}`")
+        await evt.reply("\n".join(results))
 
-    @command.new("reloadlists", help="[Mod] Alle Listendateien von der Festplatte neu einlesen.")
+    # ---------------------------------------------------------------------------
+    # !urlstatus  [Fix #6: multi-domain]
+    # ---------------------------------------------------------------------------
+
+    @command.new("urlstatus", help="Aktuellen Richtlinienstatus einer oder mehrerer Domains prüfen.")
+    @command.argument("domains_raw", pass_raw=True, required=True)
+    async def cmd_status(self, evt: MessageEvent, domains_raw: str) -> None:
+        if not await self._is_allowed_command_room(evt.room_id):
+            return
+        domain_list = _split_domain_args(domains_raw)
+        if not domain_list:
+            await evt.reply("❌ Verwendung: `!urlstatus <domain>` [domain2 ...]")
+            return
+        results: List[str] = []
+        for domain in domain_list:
+            if not _valid_domain(domain):
+                results.append(f"❌ `{domain}` — ungültige Domain")
+            elif domain in self.whitelist_set:
+                ignored = " · 🔇 Vorschau ignoriert" if domain in self.ignore_preview_set else ""
+                results.append(f"✅ `{domain}` ist **whitelisted** (exakt){ignored}")
+            elif self._matches_wildcards(domain, self.whitelist_wildcards):
+                ignored = " · 🔇 Vorschau ignoriert" if domain in self.ignore_preview_set else ""
+                results.append(f"✅ `{domain}` ist **whitelisted** (Wildcard){ignored}")
+            elif domain in self.blacklist_set:
+                results.append(f"🚫 `{domain}` ist **blacklisted** (exakt)")
+            elif self._matches_wildcards(domain, self.blacklist_wildcards):
+                results.append(f"🚫 `{domain}` ist **blacklisted** (Wildcard)")
+            else:
+                ignored = " · 🔇 Vorschau ignoriert" if domain in self.ignore_preview_set else ""
+                results.append(f"❓ `{domain}` ist **unbekannt**{ignored}")
+        await evt.reply("\n".join(results))
+
+    # ---------------------------------------------------------------------------
+    # !reloadlists
+    # ---------------------------------------------------------------------------
+
+    @command.new("reloadlists", help="[Mod] Alle Listendateien neu einlesen.")
     async def cmd_reload(self, evt: MessageEvent) -> None:
-        """
-        !reloadlists — Lädt alle .txt-Dateien neu, ohne den Bot neu starten zu müssen.
-        Läuft nicht-blockierend im Hintergrund. Erfordert Moderationsberechtigungen.
-        """
+        if not await self._is_allowed_command_room(evt.room_id):
+            return
         if not await self._is_mod(evt.sender, evt.room_id):
             await evt.reply("❌ Du hast keine Berechtigung, Listen neu zu laden.")
             return
-        old_bl = len(self.blacklist_set)
-        old_wl = len(self.whitelist_set)
-        old_bl_wc = len(self.blacklist_wildcards)
-        old_wl_wc = len(self.whitelist_wildcards)
-        await evt.reply("🔄 Listen werden im Hintergrund neu geladen – dies kann ca. 30 Sek. dauern...")
+        old_bl = len(self.blacklist_set); old_wl = len(self.whitelist_set)
+        old_bl_wc = len(self.blacklist_wildcards); old_wl_wc = len(self.whitelist_wildcards)
+        await evt.reply("🔄 Listen werden neu geladen – dauert ca. 30 Sek. ...")
         await self._reload_lists()
-        await self._send_notice(
-            evt.room_id,
+        await self._send_notice(evt.room_id,
             f"🏁 Neuladen abgeschlossen.\n"
-            f"Blacklist: **{old_bl:,}** → **{len(self.blacklist_set):,}** Domains "
+            f"Blacklist: **{old_bl:,}** → **{len(self.blacklist_set):,}** "
             f"(Wildcards: {old_bl_wc} → {len(self.blacklist_wildcards)})\n"
-            f"Whitelist: **{old_wl:,}** → **{len(self.whitelist_set):,}** Domains "
+            f"Whitelist: **{old_wl:,}** → **{len(self.whitelist_set):,}** "
             f"(Wildcards: {old_wl_wc} → {len(self.whitelist_wildcards)})",
             render_markdown=True,
         )
 
+    # ---------------------------------------------------------------------------
+    # !pending  [Fix #9: menschenlesbare Zeiten]
+    # ---------------------------------------------------------------------------
+
     @command.new("pending", help="[Mod] Offene URL-Überprüfungsanfragen auflisten.")
     async def cmd_pending(self, evt: MessageEvent) -> None:
-        """!pending — Zeigt alle Domains, die auf eine Moderationsentscheidung warten. Erfordert Mod-Berechtigung."""
+        if not await self._is_allowed_command_room(evt.room_id):
+            return
         if not await self._is_mod(evt.sender, evt.room_id):
             await evt.reply("❌ Du hast keine Berechtigung, ausstehende Überprüfungen einzusehen.")
             return
@@ -1700,221 +2024,344 @@ class URLFilterBot(Plugin):
         lines = [f"**{len(self.pending_reviews)} ausstehende Überprüfung(en):**\n"]
         for alert_id, rev in self.pending_reviews.items():
             age_s = int(time.monotonic() - rev.submitted_at)
+            age_text = _format_age(age_s)  # Fix #9
             lines.append(
-                f"• `{rev.domain}` — {rev.sender} in `{rev.original_room_id}` (vor {age_s}s)"
+                f"• `{rev.domain}` — {rev.sender} in `{rev.original_room_id}` (vor {age_text})"
             )
         await self._send_notice(evt.room_id, "\n".join(lines), render_markdown=True)
 
+    # ---------------------------------------------------------------------------
+    # !sendpending  [Fix #11]
+    # ---------------------------------------------------------------------------
+
+    @command.new("sendpending", help="[Mod] Alle offenen Überprüfungsalarme im Mod-Raum neu senden.")
+    async def cmd_sendpending(self, evt: MessageEvent) -> None:
+        """
+        Fix #11: Sendet alle offenen pending_reviews-Alarme neu in den Mod-Raum.
+        Alte Dict-Einträge werden durch neue ersetzt. Nützlich wenn alte Nachrichten
+        im Mod-Raum zu weit hochgescrollt sind.
+        """
+        if not await self._is_allowed_command_room(evt.room_id):
+            return
+        if not await self._is_mod(evt.sender, evt.room_id):
+            await evt.reply("❌ Du hast keine Berechtigung.")
+            return
+        if not self.pending_reviews:
+            await evt.reply("✅ Keine ausstehenden Überprüfungen.")
+            return
+
+        mod_room = str(self.config.get("mod_room_id", ""))
+        if not mod_room:
+            await evt.reply("❌ mod_room_id ist nicht konfiguriert.")
+            return
+
+        old_reviews = list(self.pending_reviews.items())
+        resent = 0
+        failed = 0
+
+        for old_alert_id, review in old_reviews:
+            alert_text = (
+                f"🔔 **URL-Überprüfung erforderlich** *(erneut gesendet)*\n\n"
+                f"**Absender:** {review.sender}\n"
+                f"**Raum:** `{review.original_room_id}`\n"
+                f"**Domain:** `{review.domain}`\n"
+                f"**Eingereicht:** vor {_format_age(int(time.monotonic() - review.submitted_at))}\n\n"
+                f"Reagiere mit {_EMOJI_ALLOW} zum **Whitelisten** oder {_EMOJI_BLOCK} zum **Blacklisten**.\n"
+                f"Oder verwende: `!allow {review.domain}` / `!block {review.domain}`"
+            )
+            new_alert_id = await self._send_notice(mod_room, alert_text, render_markdown=True)
+            if not new_alert_id:
+                failed += 1
+                continue
+
+            # Alten Eintrag entfernen, neuen eintragen (submitted_at beibehalten)
+            self.pending_reviews.pop(old_alert_id, None)
+            new_review = PendingReview(
+                domain=review.domain,
+                original_event_id=review.original_event_id,
+                original_room_id=review.original_room_id,
+                sender=review.sender,
+                submitted_at=review.submitted_at,  # Ursprungszeit behalten
+            )
+            self.pending_reviews[new_alert_id] = new_review
+            # Reaktionsknöpfe neu hinzufügen
+            new_review.whitelist_reaction_id = await self._send_reaction(mod_room, new_alert_id, _EMOJI_ALLOW)
+            new_review.blacklist_reaction_id = await self._send_reaction(mod_room, new_alert_id, _EMOJI_BLOCK)
+            resent += 1
+
+        msg = f"✅ {resent} Überprüfung(en) neu gesendet."
+        if failed:
+            msg += f" ⚠️ {failed} konnten nicht gesendet werden (siehe Logs)."
+        await evt.reply(msg)
+
+    # ---------------------------------------------------------------------------
+    # !mute  [Fix #10]
+    # ---------------------------------------------------------------------------
+
+    @command.new("mute", help="[Mod] Nutzer stummschalten. Verwendung: !mute <@user:server> [-t Minuten]")
+    @command.argument("args_raw", pass_raw=True, required=True)
+    async def cmd_mute(self, evt: MessageEvent, args_raw: str) -> None:
+        """
+        Fix #10: Manuelles Stummschalten eines Nutzers.
+        Syntax: !mute <@user:server> [-t <Minuten>]
+        Ohne -t wird mute_duration_minutes aus der Konfiguration verwendet.
+        """
+        if not await self._is_allowed_command_room(evt.room_id):
+            return
+        # Fix #18: Befehl per Konfiguration deaktivierbar (z.B. bei mehreren Bots im Raum)
+        if not self.config.get("mute_commands_enabled", True):
+            return
+        if not await self._is_mod(evt.sender, evt.room_id):
+            await evt.reply("❌ Du hast keine Berechtigung, Nutzer stummzuschalten.")
+            return
+
+        user_id, duration_minutes = _parse_user_time_args(args_raw)
+        if not user_id:
+            await evt.reply(
+                "❌ Verwendung: `!mute <@user:server>` oder `!mute <@user:server> -t 30`\n"
+                "Beispiel: `!mute @spammer:matrix.org -t 60`"
+            )
+            return
+        if not user_id.startswith("@") or ":" not in user_id[1:]:
+            await evt.reply("❌ Ungültige Nutzer-ID. Erwartet: `@nutzer:homeserver`")
+            return
+
+        if duration_minutes is None:
+            duration_minutes = int(self.config.get("mute_duration_minutes", 60))
+
+        # Stummschalten im Raum wo der Befehl eingegeben wurde (oder Mod-Raum)
+        target_room = str(evt.room_id)
+        success = await self._mute_user(user_id, target_room, duration_minutes)
+        if success:
+            dur_text = _format_age(duration_minutes * 60) if duration_minutes > 0 else "unbegrenzt"
+            await evt.reply(f"🔇 `{user_id}` wurde für {dur_text} stummgeschaltet.")
+            self.log.info("Manuelles Mute: %s in %s für %s min von %s.", user_id, target_room, duration_minutes, evt.sender)
+        else:
+            await evt.reply(f"❌ Stummschalten von `{user_id}` fehlgeschlagen. Prüfe die Bot-Berechtigungen und die Logs.")
+
+    # ---------------------------------------------------------------------------
+    # !unmute  [Fix #10]
+    # ---------------------------------------------------------------------------
+
+    @command.new("unmute", help="[Mod] Stummschaltung aufheben. Verwendung: !unmute <@user:server>")
+    @command.argument("args_raw", pass_raw=True, required=True)
+    async def cmd_unmute(self, evt: MessageEvent, args_raw: str) -> None:
+        """
+        Fix #10: Manuelle sofortige Entstummung eines Nutzers.
+        Entfernt auch aus _active_mutes, sodass der Auto-Entstumm-Task diesen Nutzer überspringt.
+        """
+        if not await self._is_allowed_command_room(evt.room_id):
+            return
+        # Fix #18: Befehl per Konfiguration deaktivierbar (z.B. bei mehreren Bots im Raum)
+        if not self.config.get("mute_commands_enabled", True):
+            return
+        if not await self._is_mod(evt.sender, evt.room_id):
+            await evt.reply("❌ Du hast keine Berechtigung, Stummschaltungen aufzuheben.")
+            return
+
+        user_id, _ = _parse_user_time_args(args_raw)
+        if not user_id:
+            await evt.reply("❌ Verwendung: `!unmute <@user:server>`")
+            return
+        if not user_id.startswith("@") or ":" not in user_id[1:]:
+            await evt.reply("❌ Ungültige Nutzer-ID. Erwartet: `@nutzer:homeserver`")
+            return
+
+        target_room = str(evt.room_id)
+        success = await self._do_unmute_user(user_id, target_room)
+        if success:
+            await evt.reply(f"🔊 `{user_id}` wurde entstummt.")
+            self.log.info("Manuelles Unmute: %s in %s von %s.", user_id, target_room, evt.sender)
+        else:
+            await evt.reply(f"❌ Entstummen von `{user_id}` fehlgeschlagen. Prüfe die Logs.")
+
+    # ---------------------------------------------------------------------------
+    # !liststats
+    # ---------------------------------------------------------------------------
+
     @command.new("liststats", help="Aktuelle Listengrößen und Bot-Statistiken anzeigen.")
     async def cmd_stats(self, evt: MessageEvent) -> None:
-        """!liststats — Gibt Domain-Anzahl (inkl. Wildcards) und ausstehende Überprüfungen aus."""
+        if not await self._is_allowed_command_room(evt.room_id):
+            return
         await evt.reply(
             f"📊 **Listen-Statistiken**\n"
             f"Blacklist: **{len(self.blacklist_set):,}** Domains + "
             f"**{len(self.blacklist_wildcards)}** Wildcards\n"
             f"Whitelist: **{len(self.whitelist_set):,}** Domains + "
             f"**{len(self.whitelist_wildcards)}** Wildcards\n"
+            f"Vorschau-Ignore-Liste: **{len(self.ignore_preview_set)}** Domains\n"
             f"Ausstehende Überprüfungen: **{len(self.pending_reviews)}**"
         )
 
+    # ---------------------------------------------------------------------------
+    # !hilfe
+    # ---------------------------------------------------------------------------
+
     @command.new("hilfe", help="Zeigt alle Befehle (nur per Direktnachricht / DM).")
     async def cmd_hilfe(self, evt: MessageEvent) -> None:
-        """
-        !hilfe — Deutsche Hilfeübersicht, nur in Direktnachrichten (DMs) verfügbar.
-
-        DM-PRÜFUNG
-        ----------
-        Eine Matrix-DM ist technisch ein normaler Raum mit genau 2 Mitgliedern
-        (Bot + Nutzer). Wir prüfen die Mitgliederzahl über get_joined_members().
-        Wenn der Raum mehr als 2 Mitglieder hat, weigert sich der Bot zu antworten
-        und schickt stattdessen einen kurzen Hinweis in den Gruppenraum.
-
-        Diese Einschränkung verhindert, dass die komplette Befehlsliste in
-        öffentlichen Räumen ausgegeben wird und verhindert so, dass Nutzer
-        gezielt nach nicht-öffentlichen Moderationsfunktionen suchen.
-        """
-        # ── DM-Prüfung ────────────────────────────────────────────────────────
-        # get_joined_members() gibt ein Dict {user_id: MemberStateEventContent} zurück.
-        # Genau 2 Einträge = Bot + ein Gesprächspartner → DM.
         try:
             members = await self.client.get_joined_members(evt.room_id)
             is_dm = len(members) == 2
-        except Exception as exc:
-            self.log.warning("Konnte Mitgliederzahl für %s nicht abrufen: %s", evt.room_id, exc)
-            # Im Zweifelsfall ablehnen (fail-closed)
+        except Exception:
             is_dm = False
-
         if not is_dm:
-            await evt.reply(
-                "ℹ️ Der Befehl `!hilfe` ist **nur per Direktnachricht** verfügbar.\n"
-                "Bitte schreibe mir direkt eine Nachricht und tippe dort `!hilfe`."
-            )
+            await evt.reply("ℹ️ Der Befehl `!hilfe` ist **nur per Direktnachricht** verfügbar.")
             return
 
-        # ── Hilfetext auf Deutsch ─────────────────────────────────────────────
         help_text = (
-            "🤖 **URL-Filter-Bot — Befehlsübersicht**\n\n"
-
+            "🤖 **URL-Filter-Bot — Befehlsübersicht (v2.3.0)**\n\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "🔓 **Öffentliche Befehle** *(für alle Nutzer)*\n"
+            "🔓 **Öffentliche Befehle**\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-
-            "**`!urlstatus <domain>`**\n"
-            "> Zeigt an, ob eine Domain auf der Whitelist, der Blacklist oder\n"
-            "> keiner Liste steht.\n"
-            "> Beispiel: `!urlstatus example.com`\n\n"
-
-            "**`!liststats`**\n"
-            "> Zeigt die Gesamtanzahl der geladenen Domains in der Blacklist\n"
-            "> und Whitelist sowie die Anzahl offener Moderationsanfragen.\n\n"
-
-            "**`!hilfe`**\n"
-            "> Zeigt diese Übersicht — funktioniert ausschließlich per Direktnachricht.\n\n"
-
+            "**`!urlstatus <domain> [domain2 ...]`** — Status einer oder mehrerer Domains prüfen\n\n"
+            "**`!liststats`** — Listengrößen und offene Überprüfungen anzeigen\n\n"
+            "**`!hilfe`** — Diese Übersicht (nur per DM)\n\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             "🔐 **Moderationsbefehle** *(nur für Moderatoren)*\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-
-            "Berechtigung: Mindest-Powerlevel im Moderationsraum **oder** Eintrag\n"
-            "in der Liste `allowed_users` in der Bot-Konfiguration.\n\n"
-
-            "**`!allow <domain>`**\n"
-            "> Fügt eine Domain zur Whitelist hinzu. Wildcards werden unterstützt.\n"
-            "> Gespeichert sofort im Arbeitsspeicher und in `whitelists/custom.txt`.\n"
-            "> Beispiele: `!allow vertrauenswuerdig.de` · `!allow *.trusted-cdn.net`\n\n"
-
-            "**`!block <domain>`**\n"
-            "> Sperrt eine Domain (Blacklist). Wildcards werden unterstützt.\n"
-            "> Gespeichert sofort im Arbeitsspeicher und in `blacklists/custom.txt`.\n"
-            "> Beispiele: `!block boese-seite.com` · `!block *.malware-netz.ru`\n\n"
-
-            "**`!unallow <domain>`**\n"
-            "> Entfernt eine Domain aus der Whitelist (nur aus `custom.txt`).\n"
-            "> Externe Listendateien werden nicht verändert.\n"
-            "> Beispiel: `!unallow vertrauenswuerdig.de`\n\n"
-
-            "**`!unblock <domain>`**\n"
-            "> Entfernt eine Domain aus der Blacklist (nur aus `custom.txt`).\n"
-            "> Externe Listendateien werden nicht verändert.\n"
-            "> Beispiel: `!unblock falsch-positiv.de`\n\n"
-
-            "**`!reloadlists`**\n"
-            "> Liest alle `.txt`-Dateien aus den konfigurierten Verzeichnissen\n"
-            "> neu ein, ohne den Bot neu starten zu müssen.\n"
-            "> Nützlich nach manuellen Änderungen an den Listendateien.\n"
-            "> ⚠️ Dieser Vorgang kann bis zu ~30 Sekunden dauern.\n\n"
-
-            "**`!pending`**\n"
-            "> Listet alle Domains auf, die aktuell im Moderationsraum auf\n"
-            "> eine Entscheidung warten (noch nicht genehmigt oder gesperrt).\n\n"
-
+            "**`!allow <domain> [domain2 ...]`** — Domain(s) whitelisten (Wildcards: `*.cdn.net`)\n\n"
+            "**`!block <domain> [domain2 ...]`** — Domain(s) blacklisten\n\n"
+            "**`!unallow <domain> [domain2 ...]`** — Domain(s) aus Whitelist entfernen\n\n"
+            "**`!unblock <domain> [domain2 ...]`** — Domain(s) aus Blacklist entfernen\n\n"
+            "**`!reloadlists`** — Alle Listendateien neu einlesen (~30 Sek.)\n\n"
+            "**`!pending`** — Offene Moderationsanfragen anzeigen\n\n"
+            "**`!sendpending`** — Alle offenen Alarme neu im Mod-Raum posten\n\n"
+            "**`!mute <@user:server> [-t Minuten]`** — Nutzer manuell stummschalten\n\n"
+            "**`!unmute <@user:server>`** — Stummschaltung sofort aufheben\n\n"
+            "**`!ignore <domain> [domain2 ...]`** — Domain zur Vorschau-Ignore-Liste hinzufügen\n\n"
+            "**`!unignore <domain> [domain2 ...]`** — Domain von der Vorschau-Ignore-Liste entfernen\n\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "⚙️ **Automatische Aktionen** *(kein Befehl nötig)*\n"
+            "⚙️ **Automatische Aktionen**\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-
-            "**Whitelist-Treffer** ✅\n"
-            "> Die Nachricht bleibt stehen. Wenn Linkvorschauen aktiviert sind,\n"
-            "> postet der Bot automatisch Titel und Beschreibung der Seite.\n\n"
-
-            "**Blacklist-Treffer** 🚫\n"
-            "> Die Nachricht wird sofort gelöscht (redact) und der Absender\n"
-            "> erhält eine Warnung. (Der genaue Domain-Name wird aus Sicherheitsgründen\n"
-            "> nicht im Raum angezeigt.)\n\n"
-
-            "**Unbekannte Domain** 🔍\n"
-            "> Die Nachricht wird entfernt. Im Originalraum erscheint ein Hinweis.\n"
-            "> Im Moderationsraum erscheint eine Prüfanfrage mit zwei Reaktions-\n"
-            "> knöpfen:\n"
-            "> • **✅** — Domain zur Whitelist hinzufügen (genehmigen)\n"
-            "> • **❌** — Domain zur Blacklist hinzufügen (sperren)\n\n"
-
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "📂 **Dateiformat der Listen**\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-
-            "Alle `.txt`-Dateien im Blacklist-/Whitelist-Verzeichnis werden beim\n"
-            "Start gelesen. Unterstützte Formate pro Zeile:\n"
-            "> `# Kommentar` — wird ignoriert\n"
-            "> `0.0.0.0 domain.com` — Standard-Hostfile-Format (Pi-hole etc.)\n"
-            "> `127.0.0.1 domain.com` — alternatives Loopback-Format\n"
-            "> `domain.com` — einfache Domain\n"
-            "> `*.domain.com` — Wildcard: trifft alle Subdomains (z.B. api.domain.com)\n\n"
-
-            "**URL-Erkennung im Chat:**\n"
-            "> Der Bot erkennt Links mit `https://`, mit `www.` UND nackte Domains wie\n"
-            "> `bannedurl.com` direkt im Text. Zur Vermeidung von Falsch-Positiven\n"
-            "> (z.B. Tippfehler wie 'hallo.du') wird die TLD gegen eine bekannte Liste\n"
-            "> geprüft — 'du' ist keine gültige TLD und wird ignoriert.\n\n"
-
-            "Moderationsentscheidungen (✅/❌ oder `!allow`/`!block`) werden\n"
-            "automatisch in `custom.txt` im jeweiligen Verzeichnis gespeichert."
+            "✅ **Whitelist-Treffer** — Nachricht bleibt, optionale Linkvorschau als Reply.\n\n"
+            "🚫 **Blacklist-Treffer** — Nachricht wird gelöscht, Warnung im Raum.\n\n"
+            "🔍 **Unbekannte Domain** — Nachricht wird entfernt, Prüfanfrage im Mod-Raum."
         )
-
         await self._send_notice(evt.room_id, help_text, render_markdown=True)
 
-    @command.new("stats", help="[Admin] Zeigt die Anzahl protokollierter Links für einen Nutzer.")
+    # ---------------------------------------------------------------------------
+    # !stats (Admin)
+    # ---------------------------------------------------------------------------
+
+    @command.new("stats", help="[Admin] Zeigt protokollierte Links für einen Nutzer.")
     @command.argument("user", pass_raw=True, required=True)
     async def cmd_link_stats(self, evt: MessageEvent, user: str) -> None:
-        """
-        !stats <@nutzer:server> — Gibt die Anzahl aktuell protokollierter (noch nicht
-        genehmigter) Links für den angegebenen Nutzer zurück.
-
-        BERECHTIGUNGSMODELL
-        -------------------
-        Nur Nutzer, die explizit in `mod_permissions.allowed_users` der Instanzkonfiguration
-        aufgeführt sind, dürfen diesen Befehl ausführen. Das Powerlevel im Mod-Raum genügt
-        hier NICHT — der Zugang ist absichtlich auf benannte Administratoren beschränkt.
-
-        Hintergrund: _is_mod() erlaubt Powerlevel-basierte Moderation. Für Statistikabfragen
-        soll die Berechtigung explizit und unveränderlich konfiguriert sein.
-        """
-        # ── Strenge Berechtigungsprüfung: nur explizit benannte Nutzer ────────
-        # SICHERHEIT: isinstance-Guard — verhindert Substring-Match falls
-        # allowed_users fälschlicherweise als String statt als Liste konfiguriert.
+        if not await self._is_allowed_command_room(evt.room_id):
+            return
         allowed_list = self.config.get("mod_permissions", {}).get("allowed_users", [])
         if not isinstance(allowed_list, list):
             allowed_list = []
         if str(evt.sender) not in allowed_list:
-            await evt.reply("❌ Du hast keine Berechtigung, diesen Befehl auszuführen.")
+            await evt.reply("❌ Du hast keine Berechtigung für diesen Befehl.")
             return
-
         user_id = user.strip()
-        if not user_id:
-            await evt.reply("❌ Verwendung: `!stats <@nutzer:server>`")
+        if not user_id or not user_id.startswith("@") or ":" not in user_id[1:]:
+            await evt.reply("❌ Verwendung: `!stats <@nutzer:homeserver>`")
             return
-
-        # SICHERHEIT: Matrix-ID-Format validieren.
-        # Eine gültige MXID beginnt mit '@' und enthält exakt einen ':'-Trenner.
-        # Ohne diese Prüfung könnten beliebige Strings (inkl. HTML-Zeichen) in die
-        # Reply-Nachricht eingebettet werden. Da evt.reply() formatted_body erzeugt,
-        # könnten ungültige Strings zu unerwarteter Darstellung führen.
-        if not user_id.startswith("@") or ":" not in user_id[1:]:
-            await evt.reply(
-                "❌ Ungültige Nutzer-ID. Erwartet: `!stats <@nutzer:homeserver>`\n"
-                "Beispiel: `!stats @alice:matrix.org`"
-            )
-            return
-
         if self.database is None:
-            await evt.reply("❌ Die Datenbank ist nicht verfügbar. Bitte `database: true` in `maubot.yaml` sicherstellen.")
+            await evt.reply("❌ Datenbank nicht verfügbar.")
             return
-
         try:
             count = await self.database.fetchval(
-                "SELECT COUNT(*) FROM link_log WHERE sender = $1",
-                user_id,
+                "SELECT COUNT(*) FROM link_log WHERE sender = $1", user_id,
             )
         except Exception:
-            self.log.exception("Datenbankfehler bei !stats-Abfrage für Nutzer %s.", user_id)
-            await evt.reply("❌ Datenbankfehler beim Abrufen der Statistik. Siehe Maubot-Logs.")
+            self.log.exception("Datenbankfehler bei !stats für %s.", user_id)
+            await evt.reply("❌ Datenbankfehler. Siehe Maubot-Logs.")
             return
-
         count = count or 0
         await evt.reply(
-            f"📊 **Link-Log-Statistik**\n"
-            f"Nutzer: `{user_id}`\n"
+            f"📊 **Link-Log-Statistik**\nNutzer: `{user_id}`\n"
             f"Protokollierte (nicht genehmigte) Links: **{count}**",
         )
+
+
+    # ---------------------------------------------------------------------------
+    # !ignore
+    # ---------------------------------------------------------------------------
+
+    @command.new("ignore", help="[Mod] Domain zur Vorschau-Ignore-Liste hinzufügen. Keine Linkvorschau mehr für diese Domain.")
+    @command.argument("domains_raw", pass_raw=True, required=True)
+    async def cmd_ignore(self, evt: MessageEvent, domains_raw: str) -> None:
+        if not await self._is_allowed_command_room(evt.room_id):
+            return
+        if not await self._is_mod(evt.sender, evt.room_id):
+            await evt.reply("❌ Du hast keine Berechtigung, Domains zur Ignore-Liste hinzuzufügen.")
+            return
+        domain_list = _split_domain_args(domains_raw)
+        if not domain_list:
+            await evt.reply("❌ Verwendung: `!ignore <domain>` [domain2 ...]")
+            return
+        bl_dir = self.config["blacklist_dir"]
+        ignore_file = os.path.abspath(os.path.join(bl_dir, "ignore.txt"))
+        results: List[str] = []
+        for domain in domain_list:
+            if not _valid_domain(domain):
+                results.append(f"❌ `{domain}` — ungültige Domain")
+                continue
+            if domain in self.ignore_preview_set:
+                results.append(f"ℹ️ `{domain}` ist bereits auf der Ignore-Liste")
+                continue
+            # Warnung wenn Domain nicht auf der Whitelist steht —
+            # Vorschauen werden nur für whitelistete Domains erstellt.
+            not_whitelisted = (
+                domain not in self.whitelist_set
+                and not self._matches_wildcards(domain, self.whitelist_wildcards)
+            )
+            try:
+                await self._append_to_file(domain, ignore_file)
+                self.ignore_preview_set.add(domain)
+                if not_whitelisted:
+                    results.append(
+                        f"🔇 `{domain}` zur Ignore-Liste hinzugefügt — "
+                        f"⚠️ Domain ist **nicht auf der Whitelist** "
+                        f"(Vorschauen werden nur für whitelistete Domains erstellt)"
+                    )
+                else:
+                    results.append(f"🔇 `{domain}` zur Ignore-Liste hinzugefügt (keine Linkvorschau mehr)")
+                self.log.info("'%s' zur Ignore-Liste hinzugefügt von %s.", domain, evt.sender)
+            except PermissionError:
+                results.append(f"❌ `{domain}` — Zugriff verweigert auf `{ignore_file}`")
+            except Exception as exc:
+                results.append(f"❌ `{domain}` — Fehler: `{type(exc).__name__}: {exc}`")
+        await evt.reply("\n".join(results))
+
+    # ---------------------------------------------------------------------------
+    # !unignore
+    # ---------------------------------------------------------------------------
+
+    @command.new("unignore", help="[Mod] Domain von der Vorschau-Ignore-Liste entfernen.")
+    @command.argument("domains_raw", pass_raw=True, required=True)
+    async def cmd_unignore(self, evt: MessageEvent, domains_raw: str) -> None:
+        if not await self._is_allowed_command_room(evt.room_id):
+            return
+        if not await self._is_mod(evt.sender, evt.room_id):
+            await evt.reply("❌ Du hast keine Berechtigung, Domains von der Ignore-Liste zu entfernen.")
+            return
+        domain_list = _split_domain_args(domains_raw)
+        if not domain_list:
+            await evt.reply("❌ Verwendung: `!unignore <domain>` [domain2 ...]")
+            return
+        bl_dir = self.config["blacklist_dir"]
+        ignore_file = os.path.abspath(os.path.join(bl_dir, "ignore.txt"))
+        results: List[str] = []
+        for domain in domain_list:
+            if not _valid_domain(domain):
+                results.append(f"❌ `{domain}` — ungültige Domain")
+                continue
+            if domain not in self.ignore_preview_set:
+                results.append(f"ℹ️ `{domain}` ist nicht auf der Ignore-Liste")
+                continue
+            try:
+                await self._remove_from_file(domain, ignore_file)
+                self.ignore_preview_set.discard(domain)
+                results.append(f"✅ `{domain}` von der Ignore-Liste entfernt (Linkvorschauen wieder aktiv)")
+                self.log.info("'%s' von Ignore-Liste entfernt von %s.", domain, evt.sender)
+            except PermissionError:
+                results.append(f"❌ `{domain}` — Zugriff verweigert auf `{ignore_file}`")
+            except Exception as exc:
+                results.append(f"❌ `{domain}` — Fehler: `{type(exc).__name__}: {exc}`")
+        await evt.reply("\n".join(results))
 
     # ===========================================================================
     # ABSCHNITT 16 — BERECHTIGUNGSPRÜFUNG
@@ -1922,79 +2369,55 @@ class URLFilterBot(Plugin):
 
     async def _is_mod(self, user_id: UserID, room_id: Optional[RoomID] = None) -> bool:
         """
-        Gibt True zurück, wenn user_id Moderationsrechte besitzt.
+        Fix #1: Berechtigungsprüfung — DM-Eskalation ausgeschlossen.
 
-        Zwei unabhängige Prüfungen (jede genügt zum Bestehen):
-          1. user_id ist in config.mod_permissions.allowed_users (explizite Liste).
-          2. Powerlevel von user_id im Mod-Raum >= min_power_level.
-
-        Schlägt geschlossen fehl: gibt bei API-Fehlern False zurück.
+        Zwei unabhängige Prüfungen:
+          1. user_id ist in config.mod_permissions.allowed_users
+             → IMMER gültig, unabhängig vom Raum (für serverübergreifende Admins).
+          2. Powerlevel von user_id >= min_power_level
+             → NUR im konfigurierten mod_room_id geprüft.
+             NIEMALS im aktuellen Befehlsraum oder DM.
+             Damit kann kein Nutzer durch Einladung des Bots in einen eigenen
+             Raum Admin-Rechte erlangen.
         """
         mod_cfg      = self.config.get("mod_permissions", {})
         allowed_list = mod_cfg.get("allowed_users", [])
         min_level    = int(mod_cfg.get("min_power_level", 50))
         mod_room     = str(self.config.get("mod_room_id", ""))
 
-        # SICHERHEIT: Typprüfung — verhindert Teilstring-Vergleich falls
-        # allowed_users versehentlich als String statt als Liste konfiguriert ist.
-        # Beispiel: "allowed_users: @alice:server" (String) würde bei einem
-        # naiven `str(user_id) in allowed_list`-Check als Substring-Suche wirken,
-        # da `"in"` bei Strings Zeichenketten-Enthaltensein prüft, nicht Listenmitgliedschaft.
         if not isinstance(allowed_list, list):
             self.log.warning(
-                "Konfigurationsfehler: mod_permissions.allowed_users ist kein Array (Typ: %s). "
-                "Erlaubte Nutzer werden ignoriert.",
+                "Konfigurationsfehler: mod_permissions.allowed_users ist kein Array (Typ: %s).",
                 type(allowed_list).__name__,
             )
             allowed_list = []
 
-        if not mod_room or room_id is None or str(room_id) != mod_room:
-            return False
-
+        # Fix #1: allowed_users ZUERST prüfen — kein Raumcheck nötig
         if str(user_id) in allowed_list:
             return True
 
-        check_room = room_id or self.config.get("mod_room_id", "")
-        if check_room:
-            return await self._get_power_level(check_room, user_id) >= min_level
+        # Fix #1: Powerlevel NUR im mod_room prüfen — niemals im Befehlsraum/DM
+        if not mod_room:
+            return False
 
-        return False
+        return await self._get_power_level(mod_room, user_id) >= min_level
 
     async def _get_power_level(self, room_id: RoomID, user_id: UserID) -> int:
-        """
-        Gibt den Matrix-Powerlevel von user_id in room_id zurück.
-        Gibt bei API-Fehlern 0 zurück (Ablehnen) — Fail-Closed-Richtlinie.
-
-        NULL-SICHERE LOOKUP-STRATEGIE
-        ------------------------------
-        mautrix-python speichert den Powerlevel-Zustand in PowerLevelStateEventContent wo:
-          • levels.users ein Dict ist, dessen Schlüssel je nach mautrix-Version und
-            Ereignisparser UserID-Objekte oder normale Strings sein können.
-          • levels.users_default None sein kann, wenn das Feld im Raumzustand fehlte
-            (die Matrix-Spezifikation besagt, dass der Standard-Standardwert 0 ist).
-
-        Wir prüfen beide Schlüsselformen (UserID und str) und fallen durch
-        users_default auf 0 zurück, was alle Randfälle behandelt ohne auf
-        dict.get()'s Standard int() auf einem None-Wert aufzurufen.
-        """
         try:
             levels: PowerLevelStateEventContent = await self.client.get_state_event(
                 room_id, EventType.ROOM_POWER_LEVELS
             )
-            # Zuerst UserID-Schlüssel versuchen (nativer Typ), dann str-Schlüssel (einige mautrix-Versionen)
             user_level = levels.users.get(user_id, None)
             if user_level is None:
                 user_level = levels.users.get(str(user_id), None)
-            # Auf users_default zurückfallen; falls auch das None ist, schreibt die Spezifikation 0 vor
             if user_level is None:
                 default = levels.users_default
                 user_level = int(default) if default is not None else 0
             return int(user_level)
         except Exception as exc:
-            self.log.warning(
-                "Powerlevel für %s in %s konnte nicht abgerufen werden: %s", user_id, room_id, exc
-            )
+            self.log.warning("Powerlevel für %s in %s konnte nicht abgerufen werden: %s", user_id, room_id, exc)
             return 0
+
 
 
     # ===========================================================================
@@ -2002,19 +2425,6 @@ class URLFilterBot(Plugin):
     # ===========================================================================
 
     async def _fetch_og_metadata(self, url: str) -> Optional[dict]:
-        """
-        Ruft `url` ab und extrahiert Open-Graph- / HTML-Metadaten.
-
-        Grenzen:
-          • HTTP-Timeout: link_preview_timeout Sekunden (Standard 5).
-          • Body-Begrenzung: 65.536 Byte — genug für jeden <head>-Abschnitt.
-          • Verarbeitet nur text/html-Antworten.
-          • ssl=False: Vorschau-URLs können selbst signierte Zertifikate haben;
-            wir benötigen kein verifiziertes TLS für rein lesende Metadaten.
-
-        Alle Fehler werden auf DEBUG-Ebene protokolliert, um Log-Rauschen in
-        stark frequentierten Räumen zu vermeiden.
-        """
         timeout = float(self.config.get("link_preview_timeout", 5))
         headers = {
             "User-Agent": "Mozilla/5.0 (compatible; MatrixURLFilterBot/2.0)",
@@ -2036,7 +2446,6 @@ class URLFilterBot(Plugin):
                         return None
                     raw  = await resp.content.read(65_536)
                     html = raw.decode("utf-8", errors="replace")
-
         except asyncio.TimeoutError:
             self.log.debug("Linkvorschau-Timeout für %s", url)
             return None
@@ -2049,7 +2458,6 @@ class URLFilterBot(Plugin):
 
         title = _og_tag(html, "og:title") or _html_title(html)
         desc  = _og_tag(html, "og:description") or _meta_name(html, "description")
-
         if not title and not desc:
             return None
         return {"title": (title or "").strip(), "description": (desc or "").strip()}
@@ -2059,36 +2467,13 @@ class URLFilterBot(Plugin):
     # ABSCHNITT 18 — MATRIX-NACHRICHTENDIENSTPROGRAMME
     # ===========================================================================
 
-    async def _redact(
-        self, room_id: RoomID, event_id: EventID, reason: str
-    ) -> bool:
-        """
-        Löscht eine Nachricht (redact). Gibt True bei Erfolg zurück, False bei Fehler.
-
-        FEHLERBEHANDLUNG — unzureichendes Powerlevel
-        ----------------------------------------------
-        Wenn der Powerlevel des Bots unter dem `redact_events`-Schwellwert des Raums
-        liegt (typischerweise 50), wirft mautrix eine Ausnahme (HTTP 403 MForbidden).
-
-        Wir fangen ALLE Ausnahmen ab, schreiben eine strukturierte Warnmeldung ins Log
-        und geben False zurück. Das bedeutet:
-          • Die ursprüngliche Nachricht wird NICHT entfernt (für Nutzer sichtbar).
-          • Der Warnhinweis und der Mod-Raum-Alarm werden trotzdem gesendet.
-          • Der Moderationsablauf wird fortgesetzt — nur das Löschen wird übersprungen.
-          • Der Betreiber sieht "REDACT FAILED ... Gib dem Bot Powerlevel 50+"
-            in Maubots Log und kann die Raumkonfiguration anpassen.
-
-        Das ist gewollt: im Log laut fehlzuschlagen während der Moderationsablauf
-        fortgesetzt wird, ist weit besser als den Fehler still zu verschlucken und
-        unbekannte URLs ohne Aufsicht zu lassen.
-        """
+    async def _redact(self, room_id: RoomID, event_id: EventID, reason: str) -> bool:
         try:
             await self.client.redact(room_id, event_id, reason=reason)
             return True
         except Exception as exc:
             self.log.warning(
-                "LÖSCHEN FEHLGESCHLAGEN: ereignis=%s raum=%s — wahrscheinlich unzureichendes Powerlevel. "
-                "Dem Bot PL 50+ geben (redact_events-Einstellung des Raums beachten). Fehler: %s",
+                "LÖSCHEN FEHLGESCHLAGEN: ereignis=%s raum=%s Fehler: %s — Bot benötigt PL 50+.",
                 event_id, room_id, exc,
             )
             return False
@@ -2099,38 +2484,19 @@ class URLFilterBot(Plugin):
         text: str,
         render_markdown: bool = False,
     ) -> Optional[EventID]:
-        """
-        Sendet eine m.notice-Nachricht. Gibt EventID bei Erfolg zurück, None bei Fehler.
-        m.notice ist die Matrix-Konvention für Bot-Nachrichten — Clients zeigen sie
-        mit reduzierter Deckkraft an; andere Bots ignorieren sie, um Schleifen zu verhindern.
-        """
         try:
-            content = TextMessageEventContent(
-                msgtype=MessageType.NOTICE,
-                body=text,
-            )
+            content = TextMessageEventContent(msgtype=MessageType.NOTICE, body=text)
             if render_markdown:
                 content.format = Format.HTML
                 content.formatted_body = _md_to_html(text)
             return await self.client.send_message(room_id, content)
         except Exception as exc:
-            # ── 403 / Mitgliedschaftsprüfung ──────────────────────────────────
-            # Ein 403 MForbidden bedeutet fast immer, dass der Bot kein Mitglied
-            # des Zielraums ist (meistens die mod_room_id). Eine klare, umsetzbare
-            # Meldung protokollieren, damit Betreiber schnell diagnostizieren können.
             exc_str = str(exc)
-            if (
-                "403" in exc_str
-                or "M_FORBIDDEN" in exc_str.upper()
-                or "MForbidden" in exc_str
-            ):
+            if "403" in exc_str or "M_FORBIDDEN" in exc_str.upper() or "MForbidden" in exc_str:
                 self.log.error(
-                    "FEHLER: Bot kann nicht in Raum %s senden (403 Verboten). "
-                    "Stelle sicher, dass der Bot in den in mod_room_id konfigurierten Raum eingeladen wurde "
-                    "und die Berechtigung 'Nachrichten senden' hat. "
-                    "Raum-ID in der Konfiguration: %s",
-                    room_id,
-                    self.config.get("mod_room_id", "<nicht gesetzt>"),
+                    "FEHLER: Bot kann nicht in Raum %s senden (403). "
+                    "Bot einladen und Senderechte prüfen. mod_room_id=%s",
+                    room_id, self.config.get("mod_room_id", "<nicht gesetzt>"),
                 )
             else:
                 self.log.error("Hinweis an %s konnte nicht gesendet werden: %s", room_id, exc)
@@ -2140,39 +2506,63 @@ class URLFilterBot(Plugin):
         self, room_id: RoomID, event_id: EventID, new_text: str
     ) -> None:
         """
-        Bearbeitet einen zuvor gesendeten Hinweis mithilfe der Matrix-m.replace-Relation.
-        Clients mit Bearbeitungsunterstützung (Element, FluffyChat, Nheko) zeigen den
-        aktualisierten Text an der Stelle an, wo der ursprüngliche Alarm war.
+        Fix #3: Bearbeitet einen gesendeten Hinweis. Verbesserungen:
+          - m.new_content ist vollständig spec-konform (enthält alle Pflichtfelder).
+          - Äußeres body folgt dem Matrix-Konvention für Edit-Fallback ("* text").
+          - Retry: bei Fehler einmal nach 1 Sekunde wiederholen.
+          - Fallback: bei persistentem Fehler neue Nachricht senden.
         """
-        try:
-            html = _md_to_html(new_text)
-            content = TextMessageEventContent(
-                msgtype=MessageType.NOTICE,
-                body=f"* {new_text}",
-                format=Format.HTML,
-                formatted_body=html,
-            )
-            content["m.new_content"] = {
-                "msgtype": "m.notice",
-                "body": new_text,
-                "format": "org.matrix.custom.html",
-                "formatted_body": html,
-            }
-            content["m.relates_to"] = {
-                "rel_type": "m.replace",
-                "event_id": str(event_id),
-            }
-            await self.client.send_message(room_id, content)
-        except Exception as exc:
-            self.log.error("Hinweis %s in %s konnte nicht bearbeitet werden: %s", event_id, room_id, exc)
+        html = _md_to_html(new_text)
+
+        async def _attempt() -> bool:
+            try:
+                content = TextMessageEventContent(
+                    msgtype=MessageType.NOTICE,
+                    # Äußeres body: Matrix-Konvention für Clients ohne Edit-Support
+                    body=f"* {new_text}",
+                    format=Format.HTML,
+                    # Äußeres formatted_body: Fallback-Darstellung
+                    formatted_body=f"<em>(bearbeitet)</em> {html}",
+                )
+                # Fix #3: spec-konformes m.new_content (kompletter Nachrichteninhalt)
+                content["m.new_content"] = {
+                    "msgtype": "m.notice",
+                    "body": new_text,
+                    "format": "org.matrix.custom.html",
+                    "formatted_body": html,
+                }
+                # m.relates_to mit rel_type m.replace
+                content["m.relates_to"] = {
+                    "rel_type": "m.replace",
+                    "event_id": str(event_id),
+                }
+                await self.client.send_message(room_id, content)
+                return True
+            except Exception as exc:
+                self.log.warning(
+                    "Edit-Versuch für %s in %s fehlgeschlagen: %s", event_id, room_id, exc
+                )
+                return False
+
+        # Erster Versuch
+        if await _attempt():
+            return
+
+        # Fix #3: Retry nach 1 Sekunde
+        await asyncio.sleep(1.0)
+        if await _attempt():
+            return
+
+        # Fix #3: Fallback — neue Nachricht senden wenn beide Versuche scheitern
+        self.log.error(
+            "Edit für %s in %s nach 2 Versuchen fehlgeschlagen — sende neue Nachricht.",
+            event_id, room_id,
+        )
+        await self._send_notice(room_id, new_text, render_markdown=True)
 
     async def _send_reaction(
         self, room_id: RoomID, target_id: EventID, key: str
     ) -> Optional[EventID]:
-        """
-        Postet eine m.reaction (Emoji-Annotation) auf `target_id`.
-        Rohdaten-Dict-Payload wird verwendet, um mautrix-python-Versionskopplung zu vermeiden.
-        """
         try:
             return await self.client.send_message_event(
                 room_id,
@@ -2186,10 +2576,7 @@ class URLFilterBot(Plugin):
                 },
             )
         except Exception as exc:
-            self.log.error(
-                "Reaktion '%s' auf %s in %s konnte nicht gepostet werden: %s",
-                key, target_id, room_id, exc,
-            )
+            self.log.error("Reaktion '%s' auf %s fehlgeschlagen: %s", key, target_id, exc)
             return None
 
 
@@ -2198,313 +2585,105 @@ class URLFilterBot(Plugin):
     # ===========================================================================
 
     async def _append_to_file(self, domain: str, filepath: str) -> None:
-        """
-        Hängt `domain` auf einer eigenen Zeile an `filepath` an, unter asyncio.Lock.
-
-        THREADSICHERHEITSANALYSE
-        ------------------------
-        `self._file_lock` ist ein asyncio.Lock. Alle Aufrufer (_execute_allow,
-        _execute_block, cmd_allow, cmd_block) sind Coroutinen, die auf dem
-        einzelnen asyncio-Event-Loop laufen, also bedeutet "gleichzeitig" verschränkt,
-        nicht wirklich parallel.
-
-        Szenario: Zwei Mods klicken ✅ auf zwei verschiedene Überprüfungen innerhalb
-        desselben Event-Loop-Ticks. Zwei Coroutinen werden erstellt und geplant. Die erste,
-        die `await self._file_lock` erreicht, erwirbt es und fährt fort. Die zweite
-        pausiert an diesem await-Punkt — übergibt die Kontrolle zurück an den Event-Loop
-        (der andere Ereignisse, Pings usw. verarbeitet). Wenn die erste Coroutine fertig
-        ist und `self._file_lock.release()` aufruft, setzt die zweite fort.
-
-        Ergebnis: Schreibvorgänge sind IMMER sequentiell, nie verschränkt. Die Datei
-        kann nicht von zwei Coroutinen gleichzeitig geschrieben werden.
-
-        Das synchrone open()+write() innerhalb des Locks dauert < 1 ms für einen
-        einzeiligen Anhang, daher wäre run_in_executor-Overhead hier verschwendet.
-
-        Wirft eine Ausnahme bei Fehler (Aufrufer fängt ab und meldet an den Mod-Raum).
-
-        PFADAUFLÖSUNG
-        -------------
-        `filepath` wird über `os.path.abspath()` zu einem ABSOLUTEN Pfad aufgelöst
-        bevor irgendwelche E/A durchgeführt wird. Das ist in Docker/systemd-Deployments
-        entscheidend, wo Maubots Prozess-Arbeitsverzeichnis (CWD) ein interner Pfad
-        wie `/opt/maubot/` ist, auf den der Prozess möglicherweise keine Schreibberechtigung hat.
-
-        Auflösungsreihenfolge:
-          1. Wenn `filepath` bereits absolut ist → unverändert verwenden.
-          2. Wenn relativ → gegen das Prozess-CWD auflösen.
-
-        EMPFOHLENE KONFIGURATION:
-        `blacklist_dir` und `whitelist_dir` auf ABSOLUTE Pfade in der Maubot-
-        Instanzkonfiguration setzen, z.B.:
-            blacklist_dir: /data/blacklists/
-            whitelist_dir: /data/whitelists/
-        Das eliminiert CWD-Mehrdeutigkeiten vollständig.
-        """
-        # Zu absolut auflösen, damit Fehlermeldungen immer den echten Pfad zeigen.
-        # Wenn die Konfiguration /data/blacklists/ oder /data/whitelists/ verwendet
-        # (Docker-Volume vom Host gemountet), ist der Pfad bereits absolut — abspath() ist ein No-Op.
         abs_filepath = os.path.abspath(filepath)
         async with self._file_lock:
             try:
-                # Elternverzeichnis immer (neu) erstellen — harmlos wenn es existiert.
-                # Behandelt den Fall, wo das Docker-Volume existiert, aber die
-                # Unterverzeichnisse (blacklists/ / whitelists/) noch nie erstellt wurden.
                 parent = os.path.dirname(abs_filepath)
                 if parent:
                     os.makedirs(parent, exist_ok=True)
                 with open(abs_filepath, "a", encoding="utf-8") as fh:
                     fh.write(f"\n{domain}\n")
-
             except PermissionError:
-                # ── Docker-spezifischer Zweig ──────────────────────────────────
-                # PermissionError bedeutet, das Verzeichnis existiert, aber der Maubot-
-                # Prozessnutzer hat keinen Schreibzugriff — klassisches Docker-Volume-Problem.
-                # Vollständigen Traceback protokollieren UND erneut auslösen, damit Aufrufer
-                # die umsetzbare Docker-Fix-Nachricht an den Mod-Raum senden können.
                 self.log.exception(
-                    "ZUGRIFF VERWEIGERT: '%s' kann nicht in '%s' geschrieben werden. "
-                    "Korrektur auf dem Docker-Host: "
-                    "chown -R 1337:1337 ./data/blacklists ./data/whitelists "
-                    "(Maubot läuft standardmäßig als UID 1337)",
+                    "ZUGRIFF VERWEIGERT: '%s' → '%s'. "
+                    "Fix: chown -R 1337:1337 ./data/blacklists ./data/whitelists",
                     domain, abs_filepath,
                 )
-                raise  # Aufrufer fangen PermissionError ab und senden den Docker-Hinweis
-
+                raise
             except Exception:
-                # ── Generischer Zweig ──────────────────────────────────────────
-                # FileNotFoundError, OSError, etc. — vollständiger Traceback in den Logs.
-                self.log.exception(
-                    "SCHREIBEN FEHLGESCHLAGEN: '%s' konnte nicht an '%s' angehängt werden. "
-                    "Prüfen ob der Pfad korrekt und das Dateisystem beschreibbar ist.",
-                    domain, abs_filepath,
-                )
-                raise  # Erneut auslösen, damit Aufrufer eine Fehlerbenachrichtigung an den Mod-Raum senden können
-
+                self.log.exception("SCHREIBEN FEHLGESCHLAGEN: '%s' → '%s'.", domain, abs_filepath)
+                raise
         self.log.debug("'%s' an '%s' angehängt.", domain, abs_filepath)
 
     async def _remove_from_file(self, domain: str, filepath: str) -> None:
-        """
-        Entfernt alle Zeilen, die `domain` aus `filepath` matchen, unter asyncio.Lock.
-
-        HOSTFILE-FORMAT-ERKENNUNG
-        -------------------------
-        Folgende Zeilenformate werden alle korrekt erkannt und entfernt:
-          domain.com
-          0.0.0.0 domain.com
-          127.0.0.1 domain.com
-          *.domain.com
-          0.0.0.0 *.domain.com
-          domain.com  # Inline-Kommentar
-
-        Kommentarzeilen (startend mit #) und Leerzeilen bleiben erhalten.
-
-        THREADSICHERHEIT
-        ----------------
-        Dieselbe `self._file_lock`-Garantie wie `_append_to_file`:
-        alle Aufrufer sind Coroutinen auf dem einzelnen asyncio-Event-Loop,
-        sodass Lesen→Filtern→Schreiben niemals verschränkt werden kann.
-
-        FEHLERBEHANDLUNG
-        ----------------
-        Wirft PermissionError oder OSError bei Fehler — Aufrufer fängt ab
-        und sendet umsetzbare Fehlerbenachrichtigung an den Mod-Raum.
-        """
         abs_filepath = os.path.abspath(filepath)
         async with self._file_lock:
             try:
                 if not os.path.exists(abs_filepath):
-                    # Datei existiert nicht → nichts zu entfernen, still zurückgeben
                     return
-
                 with open(abs_filepath, "r", encoding="utf-8") as fh:
                     lines = fh.readlines()
-
                 domain_lower = domain.lower()
                 new_lines: list = []
-
                 for line in lines:
                     stripped = line.strip()
-
-                    # Leerzeilen und Kommentarzeilen immer beibehalten
                     if not stripped or stripped.startswith("#"):
                         new_lines.append(line)
                         continue
-
-                    # Inline-Kommentar abschneiden: "domain.com  # Notiz" → "domain.com"
                     ci = stripped.find(" #")
                     check = stripped[:ci].rstrip() if ci != -1 else stripped
-
-                    # Hostfile-Präfix normalisieren: "0.0.0.0 domain.com" → "domain.com"
                     parts = check.split(None, 2)
                     if not parts:
                         new_lines.append(line)
                         continue
-
                     if len(parts) >= 2 and parts[0] in _LOOPBACK:
                         entry = parts[1].lower()
                     else:
                         entry = parts[0].lower()
-
-                    # Zeile verwerfen, wenn sie der zu entfernenden Domain entspricht
                     if entry == domain_lower:
                         continue
-
                     new_lines.append(line)
-
                 with open(abs_filepath, "w", encoding="utf-8") as fh:
                     fh.writelines(new_lines)
-
             except PermissionError:
-                self.log.exception(
-                    "ZUGRIFF VERWEIGERT: '%s' kann nicht aus '%s' gelesen/geschrieben werden. "
-                    "Korrektur auf dem Docker-Host: "
-                    "chown -R 1337:1337 ./data/blacklists ./data/whitelists "
-                    "(Maubot läuft standardmäßig als UID 1337)",
-                    domain, abs_filepath,
-                )
+                self.log.exception("ZUGRIFF VERWEIGERT: '%s' aus '%s' entfernen.", domain, abs_filepath)
                 raise
-
             except Exception:
-                self.log.exception(
-                    "ENTFERNEN FEHLGESCHLAGEN: '%s' konnte nicht aus '%s' entfernt werden. "
-                    "Prüfen ob der Pfad korrekt und das Dateisystem beschreibbar ist.",
-                    domain, abs_filepath,
-                )
+                self.log.exception("ENTFERNEN FEHLGESCHLAGEN: '%s' aus '%s'.", domain, abs_filepath)
                 raise
-
         self.log.debug("'%s' aus '%s' entfernt.", domain, abs_filepath)
 
 
     # ===========================================================================
-    # ABSCHNITT 19b — DATENBANK-HILFSMETHODEN (Link-Protokollierung)
+    # ABSCHNITT 19b — DATENBANK-HILFSMETHODEN
     # ===========================================================================
 
     async def _log_link(self, sender: UserID, url: str, domain: str) -> None:
-        """
-        Schreibt einen neuen Eintrag in die link_log-Tabelle.
-
-        Wird aufgerufen, wenn eine Nachricht mit einer **unbekannten** Domain
-        erkannt wird. Bereits bekannte (whitelisted/blacklisted) Domains werden
-        NICHT protokolliert — sie kommen nie durch _handle_unknown.
-
-        Parameter:
-          sender  — Matrix-User-ID der Person, die den Link gesendet hat
-          url     — Vollständige URL oder "https://<domain>" als Fallback
-          domain  — Normalisierter Hostname (für späteres Löschen bei Freigabe)
-        """
         try:
             await self.database.execute(
                 "INSERT INTO link_log (sender, url, domain) VALUES ($1, $2, $3)",
                 str(sender), url, domain,
             )
-            self.log.debug("Link protokolliert: sender=%s domain=%s url=%s", sender, domain, url)
         except Exception:
-            self.log.exception(
-                "Datenbankfehler beim Protokollieren von Link '%s' für %s.", url, sender
-            )
+            self.log.exception("Datenbankfehler beim Protokollieren von Link '%s'.", url)
 
     async def _delete_logged_links_for_domain(self, domain: str) -> None:
-        """
-        Entfernt alle link_log-Einträge für `domain`.
-
-        Wird aufgerufen, sobald eine Domain **freigegeben** (whitelisted) wird —
-        entweder über die ✅-Reaktion im Mod-Raum (_execute_allow) oder über den
-        !allow-Befehl (cmd_allow). Damit bleibt die Statistik korrekt: bereits
-        genehmigte Links zählen nicht mehr in !stats.
-
-        Fehler werden nur ins Log geschrieben und nicht nach oben propagiert,
-        damit der eigentliche Freigabe-Ablauf nicht unterbrochen wird.
-        """
         try:
-            await self.database.execute(
-                "DELETE FROM link_log WHERE domain = $1",
-                domain,
-            )
-            self.log.debug("Link-Log-Einträge für Domain '%s' gelöscht.", domain)
+            await self.database.execute("DELETE FROM link_log WHERE domain = $1", domain)
         except Exception:
-            self.log.exception(
-                "Datenbankfehler beim Löschen von Link-Log-Einträgen für Domain '%s'.", domain
-            )
+            self.log.exception("Datenbankfehler beim Löschen von Link-Log für Domain '%s'.", domain)
 
     async def _cleanup_loop(self) -> None:
-        """
-        Endloser Hintergrund-Task: führt `_run_link_log_cleanup()` beim Start
-        und danach alle 24 Stunden aus.
-
-        NEBENLÄUFIGKEITSMODELL
-        ----------------------
-        Dieser Task läuft als eigene asyncio.Task parallel zum Matrix-Sync-Loop.
-        Beide laufen auf demselben Thread (single-threaded asyncio), wechseln
-        sich aber kooperativ bei `await`-Punkten ab. Die Bereinigungsabfrage ist
-        eine einzige parametrisierte DELETE-Anweisung — der Event-Loop wird nur
-        für die Dauer des DB-Round-Trips geblockt (typischerweise < 10 ms).
-
-        ABBRUCHSICHERHEIT
-        -----------------
-        asyncio.CancelledError wird bei `await asyncio.sleep(...)` ausgelöst,
-        wenn stop() `_cleanup_task.cancel()` aufruft. Der Fehler propagiert
-        ungehindert aus dem Loop heraus — das ist das korrekte Verhalten für
-        einen sauber abbrechenden asyncio-Task.
-        """
         self.log.debug("Bereinigungsloop gestartet.")
         while True:
             await self._run_link_log_cleanup()
-            # 24-Stunden-Intervall — CancelledError bricht hier sauber ab
             await asyncio.sleep(24 * 60 * 60)
 
     async def _run_link_log_cleanup(self) -> None:
-        """
-        Löscht alle link_log-Einträge, die älter als `cleanup_after_days` Tage sind.
-
-        DATENBANKKOMPATIBILITÄT
-        -----------------------
-        Der Cutoff-Zeitpunkt wird in Python berechnet (datetime.datetime) und als
-        Bindungsparameter `$1` übergeben. Damit entfällt jede datenbankspezifische
-        INTERVAL-Syntax — asyncpg und aiosqlite erhalten identische Abfragen.
-        ISO-8601-Timestamps (gespeichert von aiosqlite) vergleichen korrekt mit
-        Python-datetime-Objekten über den Treiber-Typ-Adapter.
-
-        SICHERHEIT
-        ----------
-        Vollständig parametrisierte Abfrage — kein f-String, keine String-
-        Konkatenation. `cleanup_after_days` wird explizit zu `int()` gecastet
-        und fließt ausschließlich in die Python-`timedelta`-Berechnung ein,
-        nicht direkt in den SQL-String.
-
-        LOGGING
-        -------
-        Anzahl gelöschter Zeilen wird auf INFO geloggt, damit Betreiber die
-        Wirkung der Bereinigung nachvollziehen können.
-        """
         if self.database is None:
             return
-
         days = int(self.config.get("cleanup_after_days", 30))
         if days <= 0:
-            self.log.warning(
-                "cleanup_after_days ist %d (≤ 0) — Bereinigung wird übersprungen.", days
-            )
             return
-
         cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=days)
-
         try:
-            await self.database.execute(
-                "DELETE FROM link_log WHERE logged_at < $1",
-                cutoff,
-            )
+            await self.database.execute("DELETE FROM link_log WHERE logged_at < $1", cutoff)
             self.log.info(
-                "Link-Log-Bereinigung: Einträge älter als %d Tage (vor %s UTC) gelöscht.",
-                days,
-                cutoff.strftime("%Y-%m-%d %H:%M"),
+                "Link-Log-Bereinigung: Einträge älter als %d Tage gelöscht (cutoff: %s UTC).",
+                days, cutoff.strftime("%Y-%m-%d %H:%M"),
             )
         except Exception:
-            self.log.exception(
-                "Datenbankfehler beim Bereinigen alter link_log-Einträge "
-                "(cutoff=%s, days=%d).",
-                cutoff, days,
-            )
+            self.log.exception("Datenbankfehler bei Link-Log-Bereinigung.")
 
 
 # ===========================================================================
@@ -2527,32 +2706,82 @@ def _list_txt_files(directory: str) -> List[str]:
 
 
 def _clean_domain_arg(raw: str) -> str:
-    """Entfernt Leerzeichen; gibt das erste leerraumgetrennte Token in Kleinbuchstaben zurück."""
+    """Entfernt Leerzeichen; gibt das erste Token in Kleinbuchstaben zurück (Kompatibilität)."""
     tokens = raw.strip().lower().split()
     return tokens[0] if tokens else ""
 
 
-def _valid_domain(domain: str) -> bool:
+def _split_domain_args(raw: str) -> List[str]:
     """
-    Minimale Plausibilitätsprüfung: nicht leer, enthält Punkt, kein Skip-Eintrag.
+    Fix #6: Splittet rohe Befehlsargumente in eine Liste von Domain-Strings.
+    Jedes Leerzeichen-getrennte Token wird in Kleinbuchstaben konvertiert.
+    Leerzeichen, Kommas und Semikolons gelten als Trenner.
+    Beispiel: "example.com, other.com *.cdn.net" → ["example.com", "other.com", "*.cdn.net"]
+    """
+    # Kommas und Semikolons als zusätzliche Trennzeichen behandeln
+    normalized = raw.replace(",", " ").replace(";", " ")
+    return [t.lower() for t in normalized.split() if t]
 
-    Akzeptiert sowohl reguläre Domains ("example.com") als auch
-    Wildcard-Einträge ("*.example.com"). Bei Wildcards wird das
-    "*."-Präfix vor der Validierung abgeschnitten, sodass der Suffix
-    "example.com" dieselben Regeln erfüllen muss.
-    """
+
+def _valid_domain(domain: str) -> bool:
+    """Minimale Plausibilitätsprüfung für Domain-Strings."""
     if not domain:
         return False
-    # Wildcard-Präfix normalisieren: "*.example.com" → "example.com"
     check = domain[2:] if domain.startswith("*.") else domain
     return bool(check) and "." in check and check not in _SKIP_DOMAINS
+
+
+def _format_age(age_s: int) -> str:
+    """
+    Fix #9: Konvertiert Sekunden in die größtmögliche lesbare Einheit.
+
+    Beispiele:
+      45     → "45 Sekunden"
+      130    → "2 Minuten"
+      7320   → "2 Stunden"
+      90100  → "1 Tag"
+      432000 → "5 Tage"
+    """
+    if age_s < 60:
+        return f"{age_s} Sekunde{'n' if age_s != 1 else ''}"
+    elif age_s < 3600:
+        m = age_s // 60
+        return f"{m} Minute{'n' if m != 1 else ''}"
+    elif age_s < 86400:
+        h = age_s // 3600
+        return f"{h} Stunde{'n' if h != 1 else ''}"
+    else:
+        d = age_s // 86400
+        return f"{d} Tag{'e' if d != 1 else ''}"
+
+
+def _parse_user_time_args(raw: str) -> Tuple[Optional[str], Optional[int]]:
+    """
+    Fix #10: Parst Argumente der Form '<@user:server> [-t <Minuten>]'.
+
+    Gibt (user_id, duration_minutes) zurück.
+    duration_minutes ist None wenn -t nicht angegeben wurde.
+
+    """
+    tokens = raw.strip().split()
+    if not tokens:
+        return None, None
+    user_id: str = tokens[0]
+    duration_minutes: Optional[int] = None
+    try:
+        t_idx = tokens.index("-t")
+        if t_idx + 1 < len(tokens):
+            duration_minutes = int(tokens[t_idx + 1])
+    except (ValueError, IndexError):
+        pass
+    return user_id, duration_minutes
 
 
 def _og_tag(html: str, prop: str) -> Optional[str]:
     """
     Extrahiert content="..." aus einem OG-<meta property="...">-Tag.
-    Behandelt beide Attributreihenfolgen. Content-Länge auf 512 Zeichen begrenzt
-    mit einem possessiven Äquivalent [^"']+ — kein katastrophales Backtracking.
+    Behandelt beide Attributreihenfolgen. Content-Laenge auf 512 Zeichen begrenzt
+    mit einem possessiven Aequivalent [^"']+ — kein katastrophales Backtracking.
     """
     p = re.escape(prop)
     m = re.search(
@@ -2587,7 +2816,7 @@ def _html_title(html: str) -> Optional[str]:
 def _md_to_html(text: str) -> str:
     """
     Konvertiert die kleine Markdown-Untermenge, die dieser Bot verwendet, in HTML
-    für das Matrix-formatted_body-Feld.
+    fuer das Matrix-formatted_body-Feld.
 
     Behandelte Konstrukte (in Verarbeitungsreihenfolge):
       &, <, >         — zuerst HTML-kodiert, um Injection zu verhindern
@@ -2596,12 +2825,12 @@ def _md_to_html(text: str) -> str:
       `Inline-Code`   — <code>
       [Label](URL)    — <a href="...">
 
-    Alle Regex-Längen sind begrenzt, um Regex-Verlangsamung bei präparierten Eingaben zu verhindern.
+    Alle Regex-Laengen sind begrenzt, um Regex-Verlangsamung bei praeparierten Eingaben zu verhindern.
     """
     # 1. HTML-Sonderzeichen kodieren (verhindert Injection)
     text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-    # 2. Zeilenweise für Blockzitate verarbeiten (> wurde zu &gt; kodiert)
+    # 2. Zeilenweise fuer Blockzitate verarbeiten (> wurde zu &gt; kodiert)
     lines = text.split("\n")
     out: List[str] = []
     for line in lines:
@@ -2617,10 +2846,16 @@ def _md_to_html(text: str) -> str:
     # 4. `code` → <code>
     text = re.sub(r"`([^`]{1,200})`", r"<code>\1</code>", text)
 
-    # 5. [Label](URL) → <a href="URL">Label</a>
+    # 5. Fix #16: [Label](URL) → <a href="URL">Label</a>
+    # Sicherheitsfix: " in href wird zu &quot; kodiert (verhindert Attribut-Injection).
+    def _safe_link_sub(m: re.Match) -> str:
+        label = m.group(1)  # & < > bereits kodiert durch Schritt 1
+        href  = m.group(2).replace('"', "&quot;")
+        return f'<a href="{href}">{label}</a>'
+
     text = re.sub(
         r"\[([^\]]{1,200})\]\((https?://[^)]{1,2000})\)",
-        r'<a href="\2">\1</a>',
+        _safe_link_sub,
         text,
     )
 

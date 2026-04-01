@@ -1,0 +1,10 @@
+# ignore.txt — Vorschau-Ignore-Liste
+#
+# Domains in dieser Datei erhalten KEINE Linkvorschau,
+# auch wenn sie auf der Whitelist stehen.
+#
+# Verwaltung über Bot-Befehle:
+#   !ignore <domain>    — Domain hinzufügen
+#   !unignore <domain>  — Domain entfernen
+#
+# Format: eine Domain pro Zeile, Kommentare mit #

@@ -1,5 +1,5 @@
 # =============================================================================
-# base-config.yaml — Standardkonfiguration (v2.2.1)
+# base-config.yaml — Standardkonfiguration (v2.3.0)
 # =============================================================================
 #
 # Diese Standardwerte können nach dem Erstellen einer Instanz im Maubot-Dashboard
@@ -39,6 +39,15 @@ whitelist_dir: /data/whitelists/
 # "Nachrichten senden"-Rechten sein.
 mod_room_id: "ROOM_ID"
 
+# -----------------------------------------------------------------------------
+# BEFEHLSRÄUME  [Fix #2]
+# -----------------------------------------------------------------------------
+# Liste von Raum-IDs oder Raumaliasen, in denen der Bot auf Befehle reagiert.
+# Leer lassen [] = keine Einschränkung (alle Räume).
+# Der Moderationsraum (mod_room_id) und Direktnachrichten (DMs) sind immer erlaubt,
+# unabhängig von dieser Liste.
+# Beispiel: ["!abc123:example.com", "#mein-raum:example.com"]
+command_rooms: []
 
 # -----------------------------------------------------------------------------
 # MODERATIONSBERECHTIGUNGEN
@@ -98,14 +107,34 @@ warn_cooldown: 60
 
 # Automatisches Stummschalten aktivieren (true/false).
 # Wenn true, wird ein Nutzer stummgeschaltet (Powerlevel -1), sobald er den
-# mute_threshold innerhalb von 5 Minuten erreicht.
+# mute_threshold innerhalb des konfigurierten mute_window_minutes-Fensters erreicht.
 #
 # Hinweis: Der Bot benötigt ein höheres Powerlevel als der Zielnutzer
 # (üblicherweise 50 oder 100), um dessen Berechtigungen ändern zu können.
 mute_enabled: false
 
-# Anzahl der Verstöße innerhalb von 5 Minuten, die eine automatische Stummschaltung auslösen.
+# Anzahl der Verstöße innerhalb des Beobachtungsfensters, die eine automatische
+# Stummschaltung auslösen.
 mute_threshold: 5
+
+# Beobachtungsfenster für Verstöße (Minuten).  [Fix #8]
+# Innerhalb dieses Zeitraums werden Verstöße eines Nutzers gezählt. Liegt der
+# Zähler am Ende des Fensters unter mute_threshold, wird er zurückgesetzt.
+# Standard: 5 Minuten.
+mute_window_minutes: 5
+
+# Dauer der automatischen Stummschaltung (Minuten). 0 = unbegrenzt.  [Fix #8]
+# Ein Hintergrund-Task (_auto_unmute_loop) hebt die Stummschaltung automatisch
+# nach Ablauf dieser Zeit auf, indem er das Powerlevel des Nutzers zurücksetzt.
+# Standard: 60 Minuten.
+mute_duration_minutes: 60
+
+# Manuelle !mute- und !unmute-Befehle aktivieren (true/false).  [Fix #18]
+# Auf false setzen, wenn mehrere Moderations-Bots gleichzeitig in einem Raum
+# aktiv sind — verhindert, dass alle Bots auf denselben !mute-Befehl reagieren.
+# Hinweis: Betrifft NUR die manuellen Befehle !mute / !unmute, NICHT das
+# automatische Stummschalten via mute_enabled / mute_threshold.
+mute_commands_enabled: true
 
 
 # -----------------------------------------------------------------------------
