@@ -1,0 +1,22 @@
+# =============================================================================
+# requirements.txt — morpheus-link-bot
+# =============================================================================
+#
+# Runtime-Abhängigkeiten des Plugins.
+# Diese werden von Maubot automatisch bereitgestellt, wenn du das .mbp-Paket
+# über das Dashboard installierst.
+#
+# Für lokale Entwicklung / Tests / CI kannst du die Datei mit
+#    pip install -r requirements.txt
+# installieren.
+#
+# Hinweis: aiohttp wird von Maubot mitgeliefert → kein separater Eintrag nötig.
+
+maubot >= 0.4.0
+mautrix >= 0.20.0
+
+# =============================================================================
+# Entwicklung (optional – nur für lokale Entwicklung)
+# =============================================================================
+# ruff>=0.9.0          # Linter & Formatter (wird in .github/workflows/ci.yml genutzt)
+# pyright              # Type-Checker
