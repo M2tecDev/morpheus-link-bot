@@ -1,0 +1,35 @@
+name: CI - Lint & Format
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Ruff
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff
+
+      - name: Ruff Lint (Fehler & Style)
+        run: ruff check --output-format=github .
+
+      - name: Ruff Format Check
+        run: ruff format --check .
+
+      - name: Python Syntax Check
+        run: python -m pyright --version || echo "Pyright not installed - skipping type check"

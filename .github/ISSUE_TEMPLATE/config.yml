@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Matrix Support
+    url: https://matrix.to/#/#morpheus-link-bot:matrix.org
+    about: Für allgemeine Fragen, Hilfe oder Diskussionen (keine Bugs/Features)

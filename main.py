@@ -1,5 +1,5 @@
 """
-URL-Filter-Bot — Hochleistungsedition  (v2.3.0)
+URL-Filter-Bot — Hochleistungsedition  (v2.3.1)
 ============================================
 
 Designziele
@@ -60,6 +60,7 @@ import datetime
 import os
 import re
 import time
+import unicodedata
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Deque, Dict, Generator, List, Optional, Set, Tuple
@@ -201,6 +202,11 @@ _COMMON_TLDS: frozenset = frozenset({
     "network", "services", "solutions", "systems", "group", "global", "world",
     "today", "center", "support", "tools", "email", "social", "chat", "game",
     "web", "pw", "cc", "tv", "mobi", "tel", "coop", "aero", "museum", "jobs",
+    # Neuere gTLDs — bekannte Missbrauchs-TLDs (ergänzt in v2.3.1)
+    "zip", "mov", "phd", "foo", "nexus", "art", "design", "finance", "bank",
+    "health", "care", "insurance", "mortgage", "loans", "cash", "money",
+    "trading", "investments", "creditcard", "tax", "accountant", "expert",
+    "security", "protection", "safe", "trust", "verify", "confirm", "update",
     # Länder-TLDs (ccTLDs) — vollständige IANA-Liste der 2-Zeichen-Codes
     "com", "net", "org", "info", "biz", "edu", "gov", "mil", "int", "name",
     "io", "co", "app", "dev", "xyz", "online", "site", "club", "top", "pro",
@@ -230,6 +236,17 @@ _COMMON_TLDS: frozenset = frozenset({
     "to", "tr", "tt", "tv", "tw", "tz", "ua", "ug", "uk", "um", "us", "uy",
     "uz", "va", "vc", "ve", "vg", "vi", "vn", "vu", "wf", "ws", "ye", "yt",
     "za", "zm", "zw",
+})
+
+# ---------------------------------------------------------------------------
+# BEKANNTE URL-SHORTENER (Fix #18)
+# ---------------------------------------------------------------------------
+# Wenn eine dieser Domains in einer Nachricht auftaucht, löst der Bot die
+# Weiterleitungs-URL auf und prüft die finale Ziel-Domain stattdessen.
+_URL_SHORTENERS: frozenset = frozenset({
+    "bit.ly", "tinyurl.com", "t.co", "goo.gl", "ow.ly", "buff.ly",
+    "is.gd", "rebrand.ly", "short.io", "tiny.cc", "rb.gy", "cutt.ly",
+    "shorturl.at", "bl.ink", "snip.ly", "clck.ru", "qr.ae",
 })
 
 # ---------------------------------------------------------------------------
@@ -954,7 +971,7 @@ class URLFilterBot(Plugin):
                     if host.startswith("www."):
                         host = host[4:]
                     if host and "." in host:
-                        domains.add(host)
+                        domains.add(_normalize_domain(host))
                 except Exception:
                     continue
 
@@ -969,7 +986,7 @@ class URLFilterBot(Plugin):
                 if host.startswith("www."):
                     host = host[4:]
                 if host and "." in host:
-                    domains.add(host)
+                    domains.add(_normalize_domain(host))
             except Exception:
                 continue
 
@@ -988,7 +1005,7 @@ class URLFilterBot(Plugin):
                 continue
             final = candidate[4:] if candidate.startswith("www.") else candidate
             if final and "." in final:
-                domains.add(final)
+                domains.add(_normalize_domain(final))
 
         return domains
 
@@ -1039,8 +1056,23 @@ class URLFilterBot(Plugin):
 
     @staticmethod
     def _matches_wildcards(domain: str, wildcards: Set[str]) -> bool:
-        for suffix in wildcards:
-            if domain.endswith("." + suffix):
+        parts = domain.split(".")
+        for i in range(1, len(parts)):
+            if ".".join(parts[i:]) in wildcards:
+                return True
+        return False
+
+    @staticmethod
+    def _matches_apex(domain: str, domain_set: Set[str]) -> bool:
+        """
+        Fix #17: Prüft ob ein Eltern-Domain von `domain` im Set steht.
+        sub.evil.com  → prüft evil.com  (i=1)
+        a.b.evil.com  → prüft b.evil.com, evil.com  (i=1,2)
+        evil.com      → keine Prüfung (range leer) — verhindert TLD-Treffer
+        """
+        parts = domain.split(".")
+        for i in range(1, len(parts) - 1):
+            if ".".join(parts[i:]) in domain_set:
                 return True
         return False
 
@@ -1167,16 +1199,29 @@ class URLFilterBot(Plugin):
         if not domains:
             return
 
+        # Fix #18: Bekannte URL-Shortener auflösen — finale Ziel-Domain prüfen
+        for s_domain in list(domains):
+            if s_domain in _URL_SHORTENERS:
+                s_url = self._find_url_for_domain(body, s_domain, formatted_body)
+                if s_url:
+                    final = await self._resolve_shortener_domain(s_url)
+                    if final and final != s_domain:
+                        domains.discard(s_domain)
+                        domains.add(final)
+                        self.log.info("🔗 Shortener aufgelöst: %s → %s", s_domain, final)
+
         blacklisted: List[str] = []
         unknown:     List[str] = []
         whitelisted: List[str] = []
 
         for domain in domains:
             if (domain in self.whitelist_set
-                    or self._matches_wildcards(domain, self.whitelist_wildcards)):
+                    or self._matches_wildcards(domain, self.whitelist_wildcards)
+                    or self._matches_apex(domain, self.whitelist_set)):
                 whitelisted.append(domain)
             elif (domain in self.blacklist_set
-                    or self._matches_wildcards(domain, self.blacklist_wildcards)):
+                    or self._matches_wildcards(domain, self.blacklist_wildcards)
+                    or self._matches_apex(domain, self.blacklist_set)):
                 blacklisted.append(domain)
             else:
                 unknown.append(domain)
@@ -1262,6 +1307,7 @@ class URLFilterBot(Plugin):
     # ===========================================================================
 
     async def _handle_blacklisted(self, domains: List[str], evt: MessageEvent) -> bool:
+        self.log.info("🚫 Blacklist-Treffer: %s in %s von %s", domains, evt.room_id, evt.sender)
         redacted = await self._redact(
             evt.room_id, evt.event_id,
             reason=f"Gesperrte Domain(s): {', '.join(domains[:3])}",
@@ -1279,6 +1325,7 @@ class URLFilterBot(Plugin):
         return redacted
 
     async def _handle_unknown(self, domains: List[str], evt: MessageEvent) -> bool:
+        self.log.info("🔍 Unbekannte Domain: %s in %s von %s", domains, evt.room_id, evt.sender)
         redacted = await self._redact(
             evt.room_id, evt.event_id,
             reason="Unbekannte Domain(s) — ausstehende Moderatorenüberprüfung",
@@ -1606,8 +1653,7 @@ class URLFilterBot(Plugin):
         relates_to = getattr(evt.content, "relates_to", None)
         if relates_to is None:
             return
-        # BUGFIX: Direktvergleich ohne str() — selbe Ursache wie in on_message
-        if getattr(relates_to, "rel_type", None) != "m.annotation":
+        if str(getattr(relates_to, "rel_type", "")) != "m.annotation":
             return
         target_id = getattr(relates_to, "event_id", None)
         emoji_key = getattr(relates_to, "key", None)
@@ -1974,10 +2020,15 @@ class URLFilterBot(Plugin):
             elif self._matches_wildcards(domain, self.whitelist_wildcards):
                 ignored = " · 🔇 Vorschau ignoriert" if domain in self.ignore_preview_set else ""
                 results.append(f"✅ `{domain}` ist **whitelisted** (Wildcard){ignored}")
+            elif self._matches_apex(domain, self.whitelist_set):
+                ignored = " · 🔇 Vorschau ignoriert" if domain in self.ignore_preview_set else ""
+                results.append(f"✅ `{domain}` ist **whitelisted** (Apex){ignored}")
             elif domain in self.blacklist_set:
                 results.append(f"🚫 `{domain}` ist **blacklisted** (exakt)")
             elif self._matches_wildcards(domain, self.blacklist_wildcards):
                 results.append(f"🚫 `{domain}` ist **blacklisted** (Wildcard)")
+            elif self._matches_apex(domain, self.blacklist_set):
+                results.append(f"🚫 `{domain}` ist **blacklisted** (Apex)")
             else:
                 ignored = " · 🔇 Vorschau ignoriert" if domain in self.ignore_preview_set else ""
                 results.append(f"❓ `{domain}` ist **unbekannt**{ignored}")
@@ -1994,6 +2045,7 @@ class URLFilterBot(Plugin):
         if not await self._is_mod(evt.sender, evt.room_id):
             await evt.reply("❌ Du hast keine Berechtigung, Listen neu zu laden.")
             return
+        self.log.info("🔄 !reloadlists aufgerufen von %s in %s", evt.sender, evt.room_id)
         old_bl = len(self.blacklist_set); old_wl = len(self.whitelist_set)
         old_bl_wc = len(self.blacklist_wildcards); old_wl_wc = len(self.whitelist_wildcards)
         await evt.reply("🔄 Listen werden neu geladen – dauert ca. 30 Sek. ...")
@@ -2046,6 +2098,7 @@ class URLFilterBot(Plugin):
         if not await self._is_mod(evt.sender, evt.room_id):
             await evt.reply("❌ Du hast keine Berechtigung.")
             return
+        self.log.info("📤 !sendpending aufgerufen von %s in %s", evt.sender, evt.room_id)
         if not self.pending_reviews:
             await evt.reply("✅ Keine ausstehenden Überprüfungen.")
             return
@@ -2424,6 +2477,29 @@ class URLFilterBot(Plugin):
     # ABSCHNITT 17 — LINKVORSCHAU (OG-METADATEN)
     # ===========================================================================
 
+    async def _resolve_shortener_domain(self, url: str) -> Optional[str]:
+        """
+        Fix #18: Folgt einer Shortener-URL via HEAD-Request und gibt den
+        finalen Hostnamen nach allen Weiterleitungen zurück.
+        Timeout: 3 s — kurz gehalten um Latenz im Nachrichtenfluss minimal zu halten.
+        """
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.head(
+                    url,
+                    timeout=aiohttp.ClientTimeout(total=3.0),
+                    allow_redirects=True,
+                    ssl=False,
+                    max_redirects=5,
+                ) as resp:
+                    final_url = str(resp.url)
+                    host = (urlparse(final_url).hostname or "").lower()
+                    if host.startswith("www."):
+                        host = host[4:]
+                    return _normalize_domain(host) if host else None
+        except Exception:
+            return None
+
     async def _fetch_og_metadata(self, url: str) -> Optional[dict]:
         timeout = float(self.config.get("link_preview_timeout", 5))
         headers = {
@@ -2721,6 +2797,26 @@ def _split_domain_args(raw: str) -> List[str]:
     # Kommas und Semikolons als zusätzliche Trennzeichen behandeln
     normalized = raw.replace(",", " ").replace(";", " ")
     return [t.lower() for t in normalized.split() if t]
+
+
+def _normalize_domain(domain: str) -> str:
+    """
+    Fix #16: NFKC-Unicode-Normalisierung + IDNA/Punycode-Konvertierung.
+
+    Schritt 1 — NFKC: Kompatibilitätszeichen wie Vollbreit-ASCII (ｇｏｏｇｌｅ)
+                werden auf ihre kanonische Form (google) reduziert.
+    Schritt 2 — IDNA: Unicode-Domains (пример.com) werden in ihre Punycode-
+                Repräsentation (xn--e1afmapc.com) umgewandelt und umgekehrt,
+                sodass Blacklist-Einträge in beiden Schreibweisen greifen.
+    Fehler (ungültige IDNA-Labels) werden still ignoriert — Fallback auf lower().
+    """
+    try:
+        normalized = unicodedata.normalize("NFKC", domain)
+        if not normalized.isascii():
+            normalized = normalized.encode("idna").decode("ascii")
+        return normalized.lower()
+    except (UnicodeError, UnicodeDecodeError):
+        return domain.lower()
 
 
 def _valid_domain(domain: str) -> bool:

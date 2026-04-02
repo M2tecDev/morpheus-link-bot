@@ -1,4 +1,14 @@
-# URL-Filter-Bot für Matrix — v2.3.0
+# URL-Filter-Bot für Matrix — v2.3.1
+[![Made for Matrix](https://img.shields.io/badge/Made%20for%20Matrix-000000?logo=matrix&logoColor=white)](https://matrix.org/)
+
+![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+![Maubot](https://img.shields.io/badge/maubot-%3E%3D0.4.0-green)
+![License](https://img.shields.io/github/license/M2tecDev/morpheus-link-bot?color=brightgreen)
+![Release](https://img.shields.io/github/v/release/M2tecDev/morpheus-link-bot)
+![Last Commit](https://img.shields.io/github/last-commit/M2tecDev/morpheus-link-bot)
+![Issues](https://img.shields.io/github/issues/M2tecDev/morpheus-link-bot)
+![Stars](https://img.shields.io/github/stars/M2tecDev/morpheus-link-bot?style=social)
+
 
 Ein Maubot-Plugin, das eingehende Nachrichten in Matrix-Räumen auf URLs scannt und diese gegen konfigurierbare Blacklists und Whitelists prüft. Unbekannte Links werden automatisch zur Moderatorenüberprüfung weitergeleitet. Enthält Link-Protokollierung mit Statistikabfragen, automatischen Spam-Schutz mit optionalem Stummschalten und eine umfassende Sicherheitshärtung.
 
@@ -33,6 +43,10 @@ Ein Maubot-Plugin, das eingehende Nachrichten in Matrix-Räumen auf URLs scannt 
 **Automatische Datenbankbereinigung (neu in v2.2.1)** — Ein nicht-blockierender Hintergrund-Task löscht periodisch veraltete Einträge aus der Link-Log-Datenbank. Interval und Aufbewahrungsdauer sind konfigurierbar. Der Task läuft einmal beim Bot-Start und danach alle 24 Stunden, ohne den Matrix-Sync-Loop zu beeinträchtigen.
 
 **Wildcard-Unterstützung** — Einträge wie `*.boese-seite.com` sperren alle Subdomains auf einmal. Funktioniert in Blacklist und Whitelist gleichermaßen.
+
+**Apex-Domain-Matching (neu in v2.3.1)** — Ist `evil.com` direkt in der Blacklist eingetragen, werden Subdomains wie `sub.evil.com` oder `api.sub.evil.com` automatisch mitgeblockt — ohne gesonderten Wildcard-Eintrag. Gilt spiegelbildlich auch für die Whitelist.
+
+**URL-Shortener-Auflösung (neu in v2.3.1)** — Bekannte Kurzlink-Dienste (bit.ly, t.co, tinyurl.com u.a.) werden via HEAD-Request aufgelöst. Die finale Ziel-Domain wird geprüft statt des Shortener-Hosts selbst.
 
 **Spam-Schutz & Auto-Mute** — Ein konfigurierbarer Warn-Cooldown verhindert Notification Flooding: Nachrichten werden immer sofort gelöscht, aber eine öffentliche Warnmeldung wird pro Nutzer nur einmal innerhalb des Cooldown-Intervalls gepostet. Optional können Nutzer bei Erreichen eines konfigurierbaren Verstoß-Schwellenwerts innerhalb von 5 Minuten automatisch stummgeschaltet (Powerlevel -1) werden.
 
@@ -113,7 +127,9 @@ Der Bot verwendet vier Stufen, die nacheinander auf jede Nachricht angewendet we
 
 **Stufe 2 — Klassische URLs:** Explizite URLs mit `http://`, `https://` oder `www.`-Präfix werden per Regex erkannt.
 
-**Stufe 3 — Nackte Domains:** Domains ohne Protokoll wie `example.com` werden erkannt, sofern ihre TLD (z.B. `.com`, `.de`, `.io`) zu einem bekannten Satz von ~200 gültigen Top-Level-Domains gehört. Das verhindert Falschpositive: `hallo.du` wird ignoriert (`.du` ist keine TLD), `banned.com` wird korrekt erkannt. E-Mail-Adressen wie `user@example.com` werden dabei nicht als Domain ausgewertet.
+**Stufe 3 — Nackte Domains:** Domains ohne Protokoll wie `example.com` werden erkannt, sofern ihre TLD (z.B. `.com`, `.de`, `.io`) zu einem bekannten Satz von ~230 gültigen Top-Level-Domains gehört. Das verhindert Falschpositive: `hallo.du` wird ignoriert (`.du` ist keine TLD), `banned.com` wird korrekt erkannt. E-Mail-Adressen wie `user@example.com` werden dabei nicht als Domain ausgewertet. Ab v2.3.1 sind bekannte Missbrauchs-gTLDs wie `.zip`, `.mov` und `.phd` ebenfalls enthalten.
+
+**Unicode-Normalisierung (neu in v2.3.1):** Alle extrahierten Domains werden vor dem Listen-Vergleich normalisiert — Vollbreite-Zeichen (`ｇｏｏｇｌｅ.com` → `google.com`) sowie Unicode-Domains werden per IDNA in ihre Punycode-Form umgewandelt, sodass Blacklist-Einträge in beiden Schreibweisen greifen.
 
 ---
 
@@ -128,11 +144,13 @@ Mit dem Präfix `*.` lassen sich ganze Domain-Familien auf einmal erfassen:
 
 | Geprüfte Domain | Eintrag | Match? |
 |-----------------|---------|--------|
-| `sub.banned.com` | `*.banned.com` | ✅ Ja |
-| `api.banned.com` | `*.banned.com` | ✅ Ja |
-| `banned.com` | `*.banned.com` | ❌ Nein — Apex-Domain ist nicht abgedeckt |
+| `sub.banned.com` | `*.banned.com` | ✅ Ja — Wildcard |
+| `api.banned.com` | `*.banned.com` | ✅ Ja — Wildcard |
+| `banned.com` | `*.banned.com` | ❌ Nein — Wildcard deckt nur Subdomains ab |
+| `sub.banned.com` | `banned.com` (exakt) | ✅ Ja — Apex-Match (neu in v2.3.1) |
+| `a.b.banned.com` | `banned.com` (exakt) | ✅ Ja — Apex-Match (neu in v2.3.1) |
 
-Soll auch die Hauptdomain selbst gesperrt werden, müssen `banned.com` und `*.banned.com` als zwei separate Einträge angelegt werden.
+Soll auch die Hauptdomain selbst gesperrt werden, müssen `banned.com` und `*.banned.com` als zwei separate Einträge angelegt werden. Ist `banned.com` direkt in der Blacklist (ohne Wildcard), werden alle Subdomains ab v2.3.1 automatisch miterfasst.
 
 Wildcards können genau wie reguläre Domains mit `!unblock` / `!unallow` wieder entfernt werden.
 
@@ -331,84 +349,8 @@ Das aktualisierte `.mbp` im Maubot-Dashboard hochladen und die Instanz neu start
 | Python | >= 3.10 |
 
 ---
-
 ## Änderungsprotokoll
 
-### v2.3.0
-
-**Sicherheitshärtung**
-- Fix #1: `_is_mod()` prüft Powerlevel ausschließlich im konfigurierten `mod_room_id` — DM-Eskalation durch Einladen des Bots in einen eigenen Raum mit erhöhten Rechten ist nicht mehr möglich.
-- Fix #5: `on_message` überspringt den URL-Filter vollständig, wenn eine Nachricht mit einem bekannten Bot-Befehlsnamen beginnt — verhindert unbeabsichtigte Filterung eigener Befehle.
-
-**Neue Befehle**
-- Fix #10: `!mute <@nutzer:server> [-t Minuten]` — manuelles Stummschalten mit optionaler Zeitangabe.
-- Fix #10: `!unmute <@nutzer:server>` — manuelle Entstummschaltung.
-- Fix #11: `!sendpending` — sendet alle offenen Überprüfungsalarme neu in den Mod-Raum.
-- `!ignore` / `!unignore` — Domain zur/von der Vorschau-Ignore-Liste hinzufügen/entfernen.
-
-**Neue Konfigurationsoptionen**
-- Fix #2: `command_rooms` — Liste erlaubter Befehlsräume; leer = keine Einschränkung.
-- Fix #8: `mute_window_minutes` — konfigurierbares Beobachtungsfenster für Verstöße (Standard: 5 Minuten).
-- Fix #8: `mute_duration_minutes` — Dauer der automatischen Stummschaltung; `0` = unbegrenzt.
-- Fix #18: `mute_commands_enabled` — manuelle `!mute`/`!unmute`-Befehle aktivieren/deaktivieren.
-
-**Verbesserungen**
-- Fix #3: `_edit_notice()` erzeugt spec-konformes `m.new_content`-Format mit Retry-Mechanismus.
-- Fix #4: `!allow`/`!block` räumen `pending_reviews` auf, inklusive Wildcard-Sweep.
-- Fix #6: `!allow`, `!block`, `!unallow`, `!unblock`, `!urlstatus` akzeptieren mehrere Domains gleichzeitig (Leerzeichen-getrennt).
-- Fix #7: Semikolon gilt als Domain-Trennzeichen — `1.com;2.com;3.com` wird korrekt in drei Domains aufgeteilt.
-- Fix #9: `!pending` zeigt menschenlesbare Wartezeiten („10 Minuten", „2 Stunden").
-- Fix #8: Auto-Unmute-Hintergrund-Task (`_auto_unmute_loop`) hebt abgelaufene Stummschaltungen automatisch auf.
-- Fix #12: Bearbeitete Nachrichten aktualisieren bestehende Linkvorschauen anstatt neue zu erstellen; Vorschauen werden als Reply gesendet.
-- Fix #13: Alle whitelisteten Links in einer Nachricht erhalten jeweils eine eigene Vorschau — inkl. Thread-Support.
-- Fix #14: Aufeinanderfolgende Punkte (z.B. `achso...ne`) werden nicht mehr als Domain erkannt.
-
-**Paketierung**
-- `blacklists/ignore.txt` als Seed-Datei in das `.mbp`-Archiv aufgenommen (`maubot.yaml` → `extra_files`).
-
-### v2.2.1
-
-**Neues Feature: Automatische Datenbank-Bereinigung**
-- Neuer Hintergrund-Task `_cleanup_loop` / `_run_link_log_cleanup` — löscht periodisch veraltete `link_log`-Einträge.
-- Läuft einmalig beim Plugin-Start und danach im 24-Stunden-Takt via `asyncio.sleep` — kein Blocking des Matrix-Sync-Loops.
-- Cut-off-Zeitpunkt wird mit `datetime.timedelta` in Python berechnet und als `$1`-Parameter übergeben — 100% parametrisiert, keine datenbankspezifische `INTERVAL`-Syntax, kompatibel mit PostgreSQL und SQLite/aiosqlite.
-- Sauberes Lebenszyklusmanagement: `stop()` bricht den Task mit `cancel()` ab und wartet auf vollständige Beendigung.
-- Zwei neue Konfigurationsschlüssel in `base-config.yaml`: `cleanup_enabled` (bool) und `cleanup_after_days` (int).
-
-**Dokumentation**
-- README um dedizierte `!stats`-Erklärung erweitert (Berechtigungsmodell, Eintrag-Lebenszyklus).
-- Neue Konfigurationstabelle für Datenbank-Bereinigung.
-- Fehlerbehebungseintrag für `!stats`-Berechtigungsprobleme ergänzt.
-
-### v2.2.0
-
-**Bugfix**
-- Matrix-Nutzer-IDs (`@nutzer:homeserver`) und Raum-IDs (`!raum:homeserver`) wurden fälschlicherweise als URLs erkannt, wenn ihr Homeserver-Teil einer bekannten TLD entsprach. Betroffen war z.B. `!stats @kori:mein-server.net`, das `mein-server.net` als unbekannte Domain einstufte. Behoben durch vorgelagerte Bereinigung (Schritt 0 in der Extraktionspipeline) via `_MATRIX_ID_RE`.
-
-**Sicherheitshärtung**
-- SQL-Migration (`upgrade_v1`): F-String-Interpolation durch vollständig statische SQL-Strings ersetzt — ein Branch pro Datenbanktyp (PostgreSQL / SQLite). Kein nutzerkontrollierter Wert fließt mehr in den DDL-Code.
-- Berechtigungsprüfung (`_is_mod`, `cmd_link_stats`): `isinstance`-Guards verhindern, dass ein als String statt als Array konfiguriertes `allowed_users` zu einem unbeabsichtigten Substring-Vergleich führt. Fehlerhafte Konfigurationen werden geloggt und safe-fail auf leere Liste normalisiert.
-- Eingabevalidierung (`!stats`): Der `<user>`-Parameter wird auf gültiges Matrix-ID-Format (`@localpart:homeserver`) validiert, bevor er in Datenbankabfragen und Antwortnachrichten verwendet wird. Verhindert unerwartete Ausgabeformatierung durch ungültige Strings.
-
-**Neue Features**
-- Link-Protokollierung: Unbekannte URLs werden in einer plugin-eigenen Datenbank (`link_log`-Tabelle) gespeichert. Datenbank-Schema wird automatisch via `UpgradeTable` (mautrix async_db) beim Start migriert — kein manuelles SQL nötig.
-- Neuer Befehl `!stats <@nutzer:homeserver>`: Zeigt die Anzahl protokollierter (nicht genehmigter) Links für einen bestimmten Nutzer. Ausschließlich für Einträge in `allowed_users` zugänglich (Powerlevel genügt nicht).
-- Automatische Bereinigung: Wird eine Domain per `!allow` oder ✅-Reaktion freigegeben, werden alle zugehörigen `link_log`-Einträge automatisch gelöscht.
-
-### v2.1.0
-
-- Event-ID-Deduplizierung (LRU-Cache, 1.000 Einträge) — verhindert Doppelverarbeitung bei Matrix-Sync-Replays.
-- Emoji-Reaktions-Moderationsworkflow (✅ / ❌ direkt im Mod-Raum).
-- Automatisches Stummschalten (Auto-Mute) bei konfiguriertem Verstoß-Schwellenwert.
-- Wildcard-Unterstützung (`*.domain.com`) in Blacklist und Whitelist.
-
-### v2.0.0
-
-- Nicht-blockierender Start via `asyncio.ThreadPoolExecutor` — Matrix-Sync-Loop läuft während des Listenladens weiter.
-- Generator-basiertes Datei-Parsen — konstanter RAM-Verbrauch unabhängig von Listengröße.
-- O(1)-Lookups via Python-`set` für Blacklist und Whitelist.
-- ReDoS-sichere Regex-Architektur (flache Zeichenklassen, begrenzte Quantifizierer).
-
----
+Siehe das vollständige [Änderungsprotokoll (CHANGELOG.md)](CHANGELOG.md) für alle Versionen und detaillierten Änderungen.
 
 *Erstellt von Kori — Lizenz: AGPL-3.0-or-later*
