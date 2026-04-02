@@ -2046,7 +2046,8 @@ class URLFilterBot(Plugin):
             await evt.reply("❌ Du hast keine Berechtigung, Listen neu zu laden.")
             return
         self.log.info("🔄 !reloadlists aufgerufen von %s in %s", evt.sender, evt.room_id)
-        old_bl = len(self.blacklist_set); old_wl = len(self.whitelist_set)
+        old_bl = len(self.blacklist_set)
+        old_wl = len(self.whitelist_set)
         old_bl_wc = len(self.blacklist_wildcards)
         old_wl_wc = len(self.whitelist_wildcards)
         await evt.reply("🔄 Listen werden neu geladen – dauert ca. 30 Sek. ...")

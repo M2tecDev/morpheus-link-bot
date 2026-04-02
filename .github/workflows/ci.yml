@@ -25,11 +25,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install ruff
 
-      - name: Ruff Lint (Fehler & Style)
+      - name: Ruff Lint
         run: ruff check --output-format=github .
 
       - name: Ruff Format Check
         run: ruff format --check .
-
-      - name: Python Syntax Check
-        run: python -m pyright --version || echo "Pyright not installed - skipping type check"
