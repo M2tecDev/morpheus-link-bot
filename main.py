@@ -2047,7 +2047,8 @@ class URLFilterBot(Plugin):
             return
         self.log.info("🔄 !reloadlists aufgerufen von %s in %s", evt.sender, evt.room_id)
         old_bl = len(self.blacklist_set); old_wl = len(self.whitelist_set)
-        old_bl_wc = len(self.blacklist_wildcards); old_wl_wc = len(self.whitelist_wildcards)
+        old_bl_wc = len(self.blacklist_wildcards)
+        old_wl_wc = len(self.whitelist_wildcards)
         await evt.reply("🔄 Listen werden neu geladen – dauert ca. 30 Sek. ...")
         await self._reload_lists()
         await self._send_notice(evt.room_id,
