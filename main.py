@@ -158,11 +158,18 @@ _URL_RE: re.Pattern = re.compile(
 _LOOPBACK: frozenset = frozenset({"0.0.0.0", "127.0.0.1"})
 
 # Gültige Hostfile-Token, die KEINE echten externen Domains sind
-_SKIP_DOMAINS: frozenset = frozenset({
-    "localhost", "broadcasthost", "local",
-    "0.0.0.0", "127.0.0.1", "255.255.255.255",
-    "ip6-localhost", "ip6-loopback",
-})
+_SKIP_DOMAINS: frozenset = frozenset(
+    {
+        "localhost",
+        "broadcasthost",
+        "local",
+        "0.0.0.0",
+        "127.0.0.1",
+        "255.255.255.255",
+        "ip6-localhost",
+        "ip6-loopback",
+    }
+)
 
 # ---------------------------------------------------------------------------
 # BEKANNTE BOT-BEFEHLSNAMEN — Fix #5 (präzisiert)
@@ -173,16 +180,29 @@ _SKIP_DOMAINS: frozenset = frozenset({
 # überspringen den URL-Filter. Nachrichten wie "!https://evil.com" oder
 # "!evil.com" beginnen zwar mit "!", sind aber KEINE Befehle und werden weiterhin
 # vollständig auf URLs geprüft.
-_BOT_COMMAND_NAMES: frozenset = frozenset({
-    "allow", "block", "unallow", "unblock",
-    "urlstatus", "reloadlists", "pending", "sendpending",
-    "mute", "unmute", "liststats", "hilfe", "stats",
-    "ignore", "unignore",
-})
+_BOT_COMMAND_NAMES: frozenset = frozenset(
+    {
+        "allow",
+        "block",
+        "unallow",
+        "unblock",
+        "urlstatus",
+        "reloadlists",
+        "pending",
+        "sendpending",
+        "mute",
+        "unmute",
+        "liststats",
+        "hilfe",
+        "stats",
+        "ignore",
+        "unignore",
+    }
+)
 
 # Emoji-Schlüssel, die als Moderations-Reaktionsknöpfe im Mod-Raum verwendet werden
 _EMOJI_ALLOW = "✅"
-_EMOJI_BLOCK  = "❌"
+_EMOJI_BLOCK = "❌"
 
 # ---------------------------------------------------------------------------
 # BEKANNTE TOP-LEVEL-DOMAINS — Kuratiertes Set zur Falsch-Positiv-Prävention
@@ -192,62 +212,437 @@ _EMOJI_BLOCK  = "❌"
 # Nur Domains mit einer TLD aus diesem Set werden als echte Links behandelt.
 # Beispiel: "hallo.du" wird NICHT erkannt ("du" ∉ Set),
 # aber "bannedurl.com" wird erkannt ("com" ∈ Set).
-_COMMON_TLDS: frozenset = frozenset({
-    # Generische TLDs (gTLDs)
-    "com", "net", "org", "info", "biz", "edu", "gov", "mil", "int", "name",
-    # Häufig genutzte neue gTLDs (inkl. bekannter Missbrauchs-TLDs)
-    "io", "co", "app", "dev", "xyz", "online", "site", "club", "top", "pro",
-    "store", "shop", "tech", "live", "news", "media", "cloud", "link", "click",
-    "download", "win", "bid", "loan", "work", "space", "agency", "digital",
-    "network", "services", "solutions", "systems", "group", "global", "world",
-    "today", "center", "support", "tools", "email", "social", "chat", "game",
-    "web", "pw", "cc", "tv", "mobi", "tel", "coop", "aero", "museum", "jobs",
-    # Neuere gTLDs — bekannte Missbrauchs-TLDs (ergänzt in v2.3.1)
-    "zip", "mov", "phd", "foo", "nexus", "art", "design", "finance", "bank",
-    "health", "care", "insurance", "mortgage", "loans", "cash", "money",
-    "trading", "investments", "creditcard", "tax", "accountant", "expert",
-    "security", "protection", "safe", "trust", "verify", "confirm", "update",
-    # Länder-TLDs (ccTLDs) — vollständige IANA-Liste der 2-Zeichen-Codes
-    "com", "net", "org", "info", "biz", "edu", "gov", "mil", "int", "name",
-    "io", "co", "app", "dev", "xyz", "online", "site", "club", "top", "pro",
-    "store", "shop", "tech", "live", "news", "media", "cloud", "link", "click",
-    "download", "win", "bid", "loan", "work", "space", "agency", "digital",
-    "network", "services", "solutions", "systems", "group", "global", "world",
-    "today", "center", "support", "tools", "email", "social", "chat", "game",
-    "web", "pw", "cc", "tv", "mobi", "tel", "coop", "aero", "museum", "jobs",
-    "ac", "ad", "ae", "af", "ag", "ai", "al", "am", "ao", "aq", "ar", "as",
-    "at", "au", "aw", "ax", "az", "ba", "bb", "bd", "be", "bf", "bg", "bh",
-    "bi", "bj", "bm", "bn", "bo", "br", "bs", "bt", "bw", "by", "bz", "ca",
-    "cd", "cf", "cg", "ch", "ci", "ck", "cl", "cm", "cn", "cr", "cu", "cv",
-    "cw", "cx", "cy", "cz", "de", "dj", "dk", "dm", "do", "dz", "ec", "ee",
-    "eg", "er", "es", "et", "eu", "fi", "fj", "fk", "fm", "fo", "fr", "ga",
-    "gb", "gd", "ge", "gf", "gg", "gh", "gi", "gl", "gm", "gn", "gp", "gq",
-    "gr", "gs", "gt", "gu", "gw", "gy", "hk", "hm", "hn", "hr", "ht", "hu",
-    "id", "ie", "il", "im", "in", "iq", "ir", "is", "it", "je", "jm", "jo",
-    "jp", "ke", "kg", "kh", "ki", "km", "kn", "kp", "kr", "kw", "ky", "kz",
-    "la", "lb", "lc", "li", "lk", "lr", "ls", "lt", "lu", "lv", "ly", "ma",
-    "mc", "md", "me", "mg", "mh", "mk", "ml", "mm", "mn", "mo", "mp", "mq",
-    "mr", "ms", "mt", "mu", "mv", "mw", "mx", "my", "mz", "na", "nc", "ne",
-    "nf", "ng", "ni", "nl", "no", "np", "nr", "nu", "nz", "om", "pa", "pe",
-    "pf", "pg", "ph", "pk", "pl", "pm", "pn", "pr", "ps", "pt", "pw", "py",
-    "qa", "re", "ro", "rs", "ru", "rw", "sa", "sb", "sc", "sd", "se", "sg",
-    "sh", "si", "sk", "sl", "sm", "sn", "so", "sr", "ss", "st", "sv", "sx",
-    "sy", "sz", "tc", "td", "tf", "tg", "th", "tj", "tk", "tl", "tm", "tn",
-    "to", "tr", "tt", "tv", "tw", "tz", "ua", "ug", "uk", "um", "us", "uy",
-    "uz", "va", "vc", "ve", "vg", "vi", "vn", "vu", "wf", "ws", "ye", "yt",
-    "za", "zm", "zw",
-})
+_COMMON_TLDS: frozenset = frozenset(
+    {
+        # Generische TLDs (gTLDs)
+        "com",
+        "net",
+        "org",
+        "info",
+        "biz",
+        "edu",
+        "gov",
+        "mil",
+        "int",
+        "name",
+        # Häufig genutzte neue gTLDs (inkl. bekannter Missbrauchs-TLDs)
+        "io",
+        "co",
+        "app",
+        "dev",
+        "xyz",
+        "online",
+        "site",
+        "club",
+        "top",
+        "pro",
+        "store",
+        "shop",
+        "tech",
+        "live",
+        "news",
+        "media",
+        "cloud",
+        "link",
+        "click",
+        "download",
+        "win",
+        "bid",
+        "loan",
+        "work",
+        "space",
+        "agency",
+        "digital",
+        "network",
+        "services",
+        "solutions",
+        "systems",
+        "group",
+        "global",
+        "world",
+        "today",
+        "center",
+        "support",
+        "tools",
+        "email",
+        "social",
+        "chat",
+        "game",
+        "web",
+        "pw",
+        "cc",
+        "tv",
+        "mobi",
+        "tel",
+        "coop",
+        "aero",
+        "museum",
+        "jobs",
+        # Neuere gTLDs — bekannte Missbrauchs-TLDs (ergänzt in v2.3.1)
+        "zip",
+        "mov",
+        "phd",
+        "foo",
+        "nexus",
+        "art",
+        "design",
+        "finance",
+        "bank",
+        "health",
+        "care",
+        "insurance",
+        "mortgage",
+        "loans",
+        "cash",
+        "money",
+        "trading",
+        "investments",
+        "creditcard",
+        "tax",
+        "accountant",
+        "expert",
+        "security",
+        "protection",
+        "safe",
+        "trust",
+        "verify",
+        "confirm",
+        "update",
+        # Länder-TLDs (ccTLDs) — vollständige IANA-Liste der 2-Zeichen-Codes
+        "com",
+        "net",
+        "org",
+        "info",
+        "biz",
+        "edu",
+        "gov",
+        "mil",
+        "int",
+        "name",
+        "io",
+        "co",
+        "app",
+        "dev",
+        "xyz",
+        "online",
+        "site",
+        "club",
+        "top",
+        "pro",
+        "store",
+        "shop",
+        "tech",
+        "live",
+        "news",
+        "media",
+        "cloud",
+        "link",
+        "click",
+        "download",
+        "win",
+        "bid",
+        "loan",
+        "work",
+        "space",
+        "agency",
+        "digital",
+        "network",
+        "services",
+        "solutions",
+        "systems",
+        "group",
+        "global",
+        "world",
+        "today",
+        "center",
+        "support",
+        "tools",
+        "email",
+        "social",
+        "chat",
+        "game",
+        "web",
+        "pw",
+        "cc",
+        "tv",
+        "mobi",
+        "tel",
+        "coop",
+        "aero",
+        "museum",
+        "jobs",
+        "ac",
+        "ad",
+        "ae",
+        "af",
+        "ag",
+        "ai",
+        "al",
+        "am",
+        "ao",
+        "aq",
+        "ar",
+        "as",
+        "at",
+        "au",
+        "aw",
+        "ax",
+        "az",
+        "ba",
+        "bb",
+        "bd",
+        "be",
+        "bf",
+        "bg",
+        "bh",
+        "bi",
+        "bj",
+        "bm",
+        "bn",
+        "bo",
+        "br",
+        "bs",
+        "bt",
+        "bw",
+        "by",
+        "bz",
+        "ca",
+        "cd",
+        "cf",
+        "cg",
+        "ch",
+        "ci",
+        "ck",
+        "cl",
+        "cm",
+        "cn",
+        "cr",
+        "cu",
+        "cv",
+        "cw",
+        "cx",
+        "cy",
+        "cz",
+        "de",
+        "dj",
+        "dk",
+        "dm",
+        "do",
+        "dz",
+        "ec",
+        "ee",
+        "eg",
+        "er",
+        "es",
+        "et",
+        "eu",
+        "fi",
+        "fj",
+        "fk",
+        "fm",
+        "fo",
+        "fr",
+        "ga",
+        "gb",
+        "gd",
+        "ge",
+        "gf",
+        "gg",
+        "gh",
+        "gi",
+        "gl",
+        "gm",
+        "gn",
+        "gp",
+        "gq",
+        "gr",
+        "gs",
+        "gt",
+        "gu",
+        "gw",
+        "gy",
+        "hk",
+        "hm",
+        "hn",
+        "hr",
+        "ht",
+        "hu",
+        "id",
+        "ie",
+        "il",
+        "im",
+        "in",
+        "iq",
+        "ir",
+        "is",
+        "it",
+        "je",
+        "jm",
+        "jo",
+        "jp",
+        "ke",
+        "kg",
+        "kh",
+        "ki",
+        "km",
+        "kn",
+        "kp",
+        "kr",
+        "kw",
+        "ky",
+        "kz",
+        "la",
+        "lb",
+        "lc",
+        "li",
+        "lk",
+        "lr",
+        "ls",
+        "lt",
+        "lu",
+        "lv",
+        "ly",
+        "ma",
+        "mc",
+        "md",
+        "me",
+        "mg",
+        "mh",
+        "mk",
+        "ml",
+        "mm",
+        "mn",
+        "mo",
+        "mp",
+        "mq",
+        "mr",
+        "ms",
+        "mt",
+        "mu",
+        "mv",
+        "mw",
+        "mx",
+        "my",
+        "mz",
+        "na",
+        "nc",
+        "ne",
+        "nf",
+        "ng",
+        "ni",
+        "nl",
+        "no",
+        "np",
+        "nr",
+        "nu",
+        "nz",
+        "om",
+        "pa",
+        "pe",
+        "pf",
+        "pg",
+        "ph",
+        "pk",
+        "pl",
+        "pm",
+        "pn",
+        "pr",
+        "ps",
+        "pt",
+        "pw",
+        "py",
+        "qa",
+        "re",
+        "ro",
+        "rs",
+        "ru",
+        "rw",
+        "sa",
+        "sb",
+        "sc",
+        "sd",
+        "se",
+        "sg",
+        "sh",
+        "si",
+        "sk",
+        "sl",
+        "sm",
+        "sn",
+        "so",
+        "sr",
+        "ss",
+        "st",
+        "sv",
+        "sx",
+        "sy",
+        "sz",
+        "tc",
+        "td",
+        "tf",
+        "tg",
+        "th",
+        "tj",
+        "tk",
+        "tl",
+        "tm",
+        "tn",
+        "to",
+        "tr",
+        "tt",
+        "tv",
+        "tw",
+        "tz",
+        "ua",
+        "ug",
+        "uk",
+        "um",
+        "us",
+        "uy",
+        "uz",
+        "va",
+        "vc",
+        "ve",
+        "vg",
+        "vi",
+        "vn",
+        "vu",
+        "wf",
+        "ws",
+        "ye",
+        "yt",
+        "za",
+        "zm",
+        "zw",
+    }
+)
 
 # ---------------------------------------------------------------------------
 # BEKANNTE URL-SHORTENER (Fix #18)
 # ---------------------------------------------------------------------------
 # Wenn eine dieser Domains in einer Nachricht auftaucht, löst der Bot die
 # Weiterleitungs-URL auf und prüft die finale Ziel-Domain stattdessen.
-_URL_SHORTENERS: frozenset = frozenset({
-    "bit.ly", "tinyurl.com", "t.co", "goo.gl", "ow.ly", "buff.ly",
-    "is.gd", "rebrand.ly", "short.io", "tiny.cc", "rb.gy", "cutt.ly",
-    "shorturl.at", "bl.ink", "snip.ly", "clck.ru", "qr.ae",
-})
+_URL_SHORTENERS: frozenset = frozenset(
+    {
+        "bit.ly",
+        "tinyurl.com",
+        "t.co",
+        "goo.gl",
+        "ow.ly",
+        "buff.ly",
+        "is.gd",
+        "rebrand.ly",
+        "short.io",
+        "tiny.cc",
+        "rb.gy",
+        "cutt.ly",
+        "shorturl.at",
+        "bl.ink",
+        "snip.ly",
+        "clck.ru",
+        "qr.ae",
+    }
+)
 
 # ---------------------------------------------------------------------------
 # HREF-REGEX — Extrahiert Ziel-URLs aus HTML-<a>-Tags im formatted_body
@@ -284,9 +679,9 @@ _HREF_RE: re.Pattern = re.compile(
 #   @  → E-Mail-Adresse (user@example.com → "example.com" wird ignoriert)
 # Fix #14: aufeinanderfolgende Punkte werden im Aufrufer per Post-Match-Check abgefangen.
 _NAKED_DOMAIN_RE: re.Pattern = re.compile(
-    r'(?<![/\w\-\*\.@])'
-    r'([a-zA-Z0-9][a-zA-Z0-9\-\.]{1,200}[a-zA-Z0-9])'
-    r'(?![a-zA-Z0-9\-\.])',
+    r"(?<![/\w\-\*\.@])"
+    r"([a-zA-Z0-9][a-zA-Z0-9\-\.]{1,200}[a-zA-Z0-9])"
+    r"(?![a-zA-Z0-9\-\.])",
     re.ASCII,
 )
 
@@ -311,7 +706,7 @@ _NAKED_DOMAIN_RE: re.Pattern = re.compile(
 #   Alle Zeichenklassen sind nach oben begrenzt ({1,255}).
 #   Keine geschachtelten Quantifizierer. Worst-Case O(n). ✓
 _MATRIX_ID_RE: re.Pattern = re.compile(
-    r'[@!][a-zA-Z0-9._\-/=+]{1,255}:[a-zA-Z0-9.\-]{1,255}(?::\d{1,5})?',
+    r"[@!][a-zA-Z0-9._\-/=+]{1,255}:[a-zA-Z0-9.\-]{1,255}(?::\d{1,5})?",
     re.ASCII,
 )
 
@@ -322,12 +717,12 @@ _MATRIX_ID_RE: re.Pattern = re.compile(
 # z.B. [matrix.to](https://matrix.to/#/@alice:example.org).
 # Diese Links sind intern und sollen NICHT als externe URL gelten.
 _MATRIX_TO_MD_LINK_RE: re.Pattern = re.compile(
-    r'\[[^\]\n]{1,512}\]\(((?:https?://)?(?:www\.)?matrix\.to/#/[^\s)]{1,2048})\)',
+    r"\[[^\]\n]{1,512}\]\(((?:https?://)?(?:www\.)?matrix\.to/#/[^\s)]{1,2048})\)",
     re.ASCII | re.IGNORECASE,
 )
 
 _MATRIX_TO_TEXT_LINK_RE: re.Pattern = re.compile(
-    r'((?:https?://)?(?:www\.)?matrix\.to/#/[^\s<>()]{1,2048})',
+    r"((?:https?://)?(?:www\.)?matrix\.to/#/[^\s<>()]{1,2048})",
     re.ASCII | re.IGNORECASE,
 )
 
@@ -391,6 +786,7 @@ def _strip_matrix_to_deeplinks(text: str) -> str:
     Entfernt Matrix-interne matrix.to-Deep-Links aus Markdown- und Klartext-
     Darstellungen, damit weder URL- noch Naked-Domain-Erkennung anschlagen.
     """
+
     def _md_replacer(match: re.Match) -> str:
         return " " if _is_matrix_to_deeplink(match.group(1)) else match.group(0)
 
@@ -436,13 +832,14 @@ async def upgrade_v1(conn, scheme: Scheme) -> None:
 # ABSCHNITT 5 — KONFIGURATION
 # ===========================================================================
 
+
 class Config(BaseProxyConfig):
     def do_update(self, helper: ConfigUpdateHelper) -> None:
         helper.copy("blacklist_dir")
         helper.copy("whitelist_dir")
         helper.copy("mod_room_id")
         helper.copy("mod_permissions")
-        helper.copy("command_rooms")          # Fix #2
+        helper.copy("command_rooms")  # Fix #2
         helper.copy("enable_link_previews")
         helper.copy("link_preview_timeout")
         helper.copy("loader_threads")
@@ -451,7 +848,7 @@ class Config(BaseProxyConfig):
         helper.copy("warn_cooldown")
         helper.copy("mute_enabled")
         helper.copy("mute_threshold")
-        helper.copy("mute_window_minutes")    # Fix #8
+        helper.copy("mute_window_minutes")  # Fix #8
         helper.copy("mute_duration_minutes")  # Fix #8
         helper.copy("mute_commands_enabled")  # Fix #18
         helper.copy("cleanup_enabled")
@@ -462,14 +859,16 @@ class Config(BaseProxyConfig):
 # ABSCHNITT 6 — DATENSTRUKTUREN
 # ===========================================================================
 
+
 @dataclass
 class PendingReview:
     """Erfasst alle Kontextinformationen für eine Moderationsüberprüfung."""
-    domain:               str
-    original_event_id:    EventID
-    original_room_id:     RoomID
-    sender:               UserID
-    submitted_at:         float = field(default_factory=time.monotonic)
+
+    domain: str
+    original_event_id: EventID
+    original_room_id: RoomID
+    sender: UserID
+    submitted_at: float = field(default_factory=time.monotonic)
     whitelist_reaction_id: Optional[EventID] = field(default=None)
     blacklist_reaction_id: Optional[EventID] = field(default=None)
 
@@ -477,18 +876,20 @@ class PendingReview:
 @dataclass
 class LoadResult:
     """Rückgabewert des synchronen Datei-Parser-Workers pro Datei."""
-    filename:          str
-    domains:           Set[str]
-    wildcards:         Set[str]
-    lines_read:        int
-    domains_accepted:  int
-    wildcards_found:   int
-    elapsed_ms:        float
+
+    filename: str
+    domains: Set[str]
+    wildcards: Set[str]
+    lines_read: int
+    domains_accepted: int
+    wildcards_found: int
+    elapsed_ms: float
 
 
 # ===========================================================================
 # ABSCHNITT 7 — HAUPTKLASSE DES PLUGINS
 # ===========================================================================
+
 
 class URLFilterBot(Plugin):
     """
@@ -662,7 +1063,6 @@ class URLFilterBot(Plugin):
         await super().stop()
         self.log.info("URLFilterBot wurde beendet.")
 
-
     # ===========================================================================
     # ABSCHNITT 8 — HOCHLEISTUNGS-DATEIPARSER
     # ===========================================================================
@@ -764,7 +1164,7 @@ class URLFilterBot(Plugin):
         t0 = time.monotonic()
         self.log.info("  ⏳  Lade %s ...", filename)
 
-        domains:   Set[str] = set()
+        domains: Set[str] = set()
         wildcards: Set[str] = set()
         lines_read = 0
 
@@ -776,7 +1176,7 @@ class URLFilterBot(Plugin):
             # reguläre Domains, da der exakte String "*.banned.com" keiner echten
             # Domain entspricht und niemals zu einem Lookup-Treffer führen würde.
             if raw_entry.startswith("*."):
-                suffix = raw_entry[2:]          # "*.banned.com" → "banned.com"
+                suffix = raw_entry[2:]  # "*.banned.com" → "banned.com"
                 if suffix and "." in suffix:
                     wildcards.add(suffix)
             else:
@@ -786,7 +1186,11 @@ class URLFilterBot(Plugin):
         elapsed_ms = (time.monotonic() - t0) * 1_000
         self.log.info(
             "  ✅  %s — %d Domains + %d Wildcards aus %d Zeilen (%.0f ms)",
-            filename, len(domains), len(wildcards), lines_read, elapsed_ms,
+            filename,
+            len(domains),
+            len(wildcards),
+            lines_read,
+            elapsed_ms,
         )
         return LoadResult(
             filename=filename,
@@ -833,43 +1237,54 @@ class URLFilterBot(Plugin):
 
         # ignore.txt aus dem Blacklist-Verzeichnis explizit ausschließen —
         # sie wird separat geladen und darf die Blacklist nicht beeinflussen.
-        bl_files = [f for f in _list_txt_files(bl_dir) if os.path.basename(f) != "ignore.txt"]
+        bl_files = [
+            f for f in _list_txt_files(bl_dir) if os.path.basename(f) != "ignore.txt"
+        ]
         wl_files = _list_txt_files(wl_dir)
 
         if not bl_files and not wl_files:
             self.log.warning(
                 "Keine .txt-Dateien in blacklist_dir='%s' oder whitelist_dir='%s' gefunden. "
                 "Alle URLs werden als unbekannt behandelt.",
-                bl_dir, wl_dir,
+                bl_dir,
+                wl_dir,
             )
             return
 
         total = len(bl_files) + len(wl_files)
         self.log.info(
             "🚀 Starte Listen-Ladevorgang: %d Dateien gesamt (bl=%d  wl=%d)",
-            total, len(bl_files), len(wl_files),
+            total,
+            len(bl_files),
+            len(wl_files),
         )
         t_start = time.monotonic()
 
         # Jede Datei an den Thread-Pool übermitteln
         bl_futures = [
-            loop.run_in_executor(self._loader_pool, self._load_one_file, fp, min_len, max_len)
+            loop.run_in_executor(
+                self._loader_pool, self._load_one_file, fp, min_len, max_len
+            )
             for fp in bl_files
         ]
         wl_futures = [
-            loop.run_in_executor(self._loader_pool, self._load_one_file, fp, min_len, max_len)
+            loop.run_in_executor(
+                self._loader_pool, self._load_one_file, fp, min_len, max_len
+            )
             for fp in wl_files
         ]
 
         # Alle gleichzeitig abwarten; return_exceptions=True bedeutet, eine fehlerhafte
         # Datei bricht den Rest nicht ab
         all_results: List = await asyncio.gather(
-            *bl_futures, *wl_futures, return_exceptions=True,
+            *bl_futures,
+            *wl_futures,
+            return_exceptions=True,
         )
 
         # In neue Sets zusammenführen (Domains + Wildcards getrennt)
-        new_bl:    Set[str] = set()
-        new_wl:    Set[str] = set()
+        new_bl: Set[str] = set()
+        new_wl: Set[str] = set()
         new_bl_wc: Set[str] = set()
         new_wl_wc: Set[str] = set()
         n_bl = len(bl_futures)
@@ -880,7 +1295,7 @@ class URLFilterBot(Plugin):
             if isinstance(result, BaseException):
                 self.log.error("Datei-Loader-Ausnahme: %s", result)
                 continue
-            total_lines   += result.lines_read
+            total_lines += result.lines_read
             total_domains += result.domains_accepted
             if i < n_bl:
                 new_bl.update(result.domains)
@@ -891,8 +1306,8 @@ class URLFilterBot(Plugin):
 
         # Atomarer Referenz-Tausch — alle vier Sets gleichzeitig
         # (GIL garantiert Atomarität jedes einzelnen STORE_ATTR-Bytecodes)
-        self.blacklist_set      = new_bl
-        self.whitelist_set      = new_wl
+        self.blacklist_set = new_bl
+        self.whitelist_set = new_wl
         self.blacklist_wildcards = new_bl_wc
         self.whitelist_wildcards = new_wl_wc
 
@@ -900,9 +1315,12 @@ class URLFilterBot(Plugin):
         self.log.info(
             "🏁 Ladevorgang abgeschlossen: %d BL-Domains | %d WL-Domains | "
             "%d BL-Wildcards | %d WL-Wildcards | %d Zeilen gelesen | %.1f s",
-            len(self.blacklist_set), len(self.whitelist_set),
-            len(self.blacklist_wildcards), len(self.whitelist_wildcards),
-            total_lines, elapsed,
+            len(self.blacklist_set),
+            len(self.whitelist_set),
+            len(self.blacklist_wildcards),
+            len(self.whitelist_wildcards),
+            total_lines,
+            elapsed,
         )
 
         # ── ignore.txt separat laden (Vorschau-Ignore-Liste) ─────────────────
@@ -910,10 +1328,16 @@ class URLFilterBot(Plugin):
         if os.path.isfile(ignore_file):
             try:
                 ignore_result = await loop.run_in_executor(
-                    self._loader_pool, self._load_one_file, ignore_file, min_len, max_len
+                    self._loader_pool,
+                    self._load_one_file,
+                    ignore_file,
+                    min_len,
+                    max_len,
                 )
                 if isinstance(ignore_result, BaseException):
-                    self.log.error("Fehler beim Laden von ignore.txt: %s", ignore_result)
+                    self.log.error(
+                        "Fehler beim Laden von ignore.txt: %s", ignore_result
+                    )
                 else:
                     self.ignore_preview_set = ignore_result.domains
                     self.log.info(
@@ -924,7 +1348,6 @@ class URLFilterBot(Plugin):
                 self.log.error("Fehler beim Laden von ignore.txt: %s", exc)
         else:
             self.ignore_preview_set = set()
-
 
     # ===========================================================================
     # ABSCHNITT 9 — URL- UND DOMAIN-EXTRAKTION
@@ -958,7 +1381,9 @@ class URLFilterBot(Plugin):
                 href = href.strip()
                 if _is_matrix_to_deeplink(href):
                     continue
-                if href.startswith(("mailto:", "matrix:", "mxc:", "tel:", "xmpp:", "#", "/", "data:")):
+                if href.startswith(
+                    ("mailto:", "matrix:", "mxc:", "tel:", "xmpp:", "#", "/", "data:")
+                ):
                     continue
                 try:
                     if href.startswith("//"):
@@ -999,7 +1424,7 @@ class URLFilterBot(Plugin):
             if "." not in candidate:
                 continue
             last_dot = candidate.rfind(".")
-            tld = candidate[last_dot + 1:]
+            tld = candidate[last_dot + 1 :]
             domain_part = candidate[:last_dot]
             if not tld.isalpha() or tld not in _COMMON_TLDS or not domain_part:
                 continue
@@ -1076,7 +1501,6 @@ class URLFilterBot(Plugin):
                 return True
         return False
 
-
     # ===========================================================================
     # ABSCHNITT 10 — HAUPT-NACHRICHTENHANDLER
     # ===========================================================================
@@ -1107,7 +1531,9 @@ class URLFilterBot(Plugin):
             return
 
         body: str = evt.content.body or ""
-        formatted_body: Optional[str] = getattr(evt.content, "formatted_body", None) or None
+        formatted_body: Optional[str] = (
+            getattr(evt.content, "formatted_body", None) or None
+        )
 
         # ── Fix #5 (präzisiert): Nur echte Bot-Befehle überspringen den URL-Filter ──
         # Prüfung: beginnt die Nachricht mit "!" UND ist das erste Token danach
@@ -1121,7 +1547,11 @@ class URLFilterBot(Plugin):
         # Die neue Prüfung schließt diesen Bypass aus.
         _body_stripped = body.strip()
         if _body_stripped.startswith("!") and len(_body_stripped) > 1:
-            _cmd_token = _body_stripped[1:].split()[0].lower() if _body_stripped[1:].split() else ""
+            _cmd_token = (
+                _body_stripped[1:].split()[0].lower()
+                if _body_stripped[1:].split()
+                else ""
+            )
             if _cmd_token in _BOT_COMMAND_NAMES:
                 return
 
@@ -1208,20 +1638,26 @@ class URLFilterBot(Plugin):
                     if final and final != s_domain:
                         domains.discard(s_domain)
                         domains.add(final)
-                        self.log.info("🔗 Shortener aufgelöst: %s → %s", s_domain, final)
+                        self.log.info(
+                            "🔗 Shortener aufgelöst: %s → %s", s_domain, final
+                        )
 
         blacklisted: List[str] = []
-        unknown:     List[str] = []
+        unknown: List[str] = []
         whitelisted: List[str] = []
 
         for domain in domains:
-            if (domain in self.whitelist_set
-                    or self._matches_wildcards(domain, self.whitelist_wildcards)
-                    or self._matches_apex(domain, self.whitelist_set)):
+            if (
+                domain in self.whitelist_set
+                or self._matches_wildcards(domain, self.whitelist_wildcards)
+                or self._matches_apex(domain, self.whitelist_set)
+            ):
                 whitelisted.append(domain)
-            elif (domain in self.blacklist_set
-                    or self._matches_wildcards(domain, self.blacklist_wildcards)
-                    or self._matches_apex(domain, self.blacklist_set)):
+            elif (
+                domain in self.blacklist_set
+                or self._matches_wildcards(domain, self.blacklist_wildcards)
+                or self._matches_apex(domain, self.blacklist_set)
+            ):
                 blacklisted.append(domain)
             else:
                 unknown.append(domain)
@@ -1245,7 +1681,9 @@ class URLFilterBot(Plugin):
             msg_key = str(reply_target_id)
 
             # Domains herausfiltern die auf der Vorschau-Ignore-Liste stehen
-            preview_domains = [d for d in whitelisted if d not in self.ignore_preview_set]
+            preview_domains = [
+                d for d in whitelisted if d not in self.ignore_preview_set
+            ]
 
             # ── Thread-Root für Edit-Pfad ermitteln ──────────────────────────
             # Für neue Nachrichten ist thread_root_id bereits gesetzt (oben).
@@ -1260,8 +1698,13 @@ class URLFilterBot(Plugin):
                             APIPath.v3.rooms[evt.room_id].event[original_event_id],
                         )
                         if isinstance(_orig_raw, dict):
-                            _orig_rt = (_orig_raw.get("content") or {}).get("m.relates_to") or {}
-                            if isinstance(_orig_rt, dict) and _orig_rt.get("rel_type") == "m.thread":
+                            _orig_rt = (_orig_raw.get("content") or {}).get(
+                                "m.relates_to"
+                            ) or {}
+                            if (
+                                isinstance(_orig_rt, dict)
+                                and _orig_rt.get("rel_type") == "m.thread"
+                            ):
                                 _tid = _orig_rt.get("event_id")
                                 if _tid:
                                     thread_root_id = str(_tid)
@@ -1271,8 +1714,12 @@ class URLFilterBot(Plugin):
             if original_event_id:
                 # Edit-Pfad: volle Synchronisation alter ↔ neuer Vorschauen
                 await self._update_previews_for_edit(
-                    msg_key, preview_domains, body, formatted_body,
-                    evt.room_id, reply_target_id,
+                    msg_key,
+                    preview_domains,
+                    body,
+                    formatted_body,
+                    evt.room_id,
+                    reply_target_id,
                     thread_root_id=thread_root_id,
                 )
             elif preview_domains:
@@ -1283,7 +1730,9 @@ class URLFilterBot(Plugin):
                     if not url:
                         continue
                     new_preview_id = await self._post_link_preview(
-                        domain, url, evt.room_id,
+                        domain,
+                        url,
+                        evt.room_id,
                         reply_to_event_id=reply_target_id,
                         thread_root_id=thread_root_id,
                     )
@@ -1301,15 +1750,17 @@ class URLFilterBot(Plugin):
                             del self._preview_map[old_key]
                             self._thread_map.pop(old_key, None)
 
-
     # ===========================================================================
     # ABSCHNITT 11 — ROUTING-AKTIONSHANDLER
     # ===========================================================================
 
     async def _handle_blacklisted(self, domains: List[str], evt: MessageEvent) -> bool:
-        self.log.info("🚫 Blacklist-Treffer: %s in %s von %s", domains, evt.room_id, evt.sender)
+        self.log.info(
+            "🚫 Blacklist-Treffer: %s in %s von %s", domains, evt.room_id, evt.sender
+        )
         redacted = await self._redact(
-            evt.room_id, evt.event_id,
+            evt.room_id,
+            evt.event_id,
             reason=f"Gesperrte Domain(s): {', '.join(domains[:3])}",
         )
         now = time.monotonic()
@@ -1325,9 +1776,12 @@ class URLFilterBot(Plugin):
         return redacted
 
     async def _handle_unknown(self, domains: List[str], evt: MessageEvent) -> bool:
-        self.log.info("🔍 Unbekannte Domain: %s in %s von %s", domains, evt.room_id, evt.sender)
+        self.log.info(
+            "🔍 Unbekannte Domain: %s in %s von %s", domains, evt.room_id, evt.sender
+        )
         redacted = await self._redact(
-            evt.room_id, evt.event_id,
+            evt.room_id,
+            evt.event_id,
             reason="Unbekannte Domain(s) — ausstehende Moderatorenüberprüfung",
         )
         now = time.monotonic()
@@ -1341,7 +1795,7 @@ class URLFilterBot(Plugin):
                 f"Du wirst benachrichtigt, sobald eine Entscheidung getroffen wurde.",
             )
         _body: str = evt.content.body or ""
-        _fmt:  Optional[str] = getattr(evt.content, "formatted_body", None) or None
+        _fmt: Optional[str] = getattr(evt.content, "formatted_body", None) or None
         for domain in domains:
             await self._submit_for_review(domain, evt)
             if self.database is not None:
@@ -1381,7 +1835,9 @@ class URLFilterBot(Plugin):
                     f"🔇 {sender} wurde wegen wiederholter Regelverstöße für {dur_text} stummgeschaltet.",
                 )
 
-    async def _mute_user(self, user_id: str, room_id: RoomID, duration_minutes: Optional[int] = None) -> bool:
+    async def _mute_user(
+        self, user_id: str, room_id: RoomID, duration_minutes: Optional[int] = None
+    ) -> bool:
         """
         Fix #8: Setzt Powerlevel auf -1 und registriert den Zeitstempel für Auto-Entstummen.
         duration_minutes=0 bedeutet unbegrenzt. None → aus Konfiguration lesen.
@@ -1389,14 +1845,20 @@ class URLFilterBot(Plugin):
         if duration_minutes is None:
             duration_minutes = int(self.config.get("mute_duration_minutes", 60))
         try:
-            pl_content = await self.client.get_state_event(room_id, EventType.ROOM_POWER_LEVELS)
+            pl_content = await self.client.get_state_event(
+                room_id, EventType.ROOM_POWER_LEVELS
+            )
             users: dict = pl_content.get("users", {})
             if users.get(user_id) == -1:
                 return True  # bereits stummgeschaltet
             users[user_id] = -1
             pl_content["users"] = users
-            await self.client.send_state_event(room_id, EventType.ROOM_POWER_LEVELS, pl_content)
-            self.log.info("Nutzer %s in Raum %s stummgeschaltet (PL -1).", user_id, room_id)
+            await self.client.send_state_event(
+                room_id, EventType.ROOM_POWER_LEVELS, pl_content
+            )
+            self.log.info(
+                "Nutzer %s in Raum %s stummgeschaltet (PL -1).", user_id, room_id
+            )
             # Fix #8: Zeitstempel für Auto-Entstummen speichern
             if duration_minutes and duration_minutes > 0:
                 unmute_at = time.monotonic() + duration_minutes * 60.0
@@ -1415,18 +1877,24 @@ class URLFilterBot(Plugin):
         """
         self._active_mutes.pop((str(user_id), str(room_id)), None)
         try:
-            pl_content = await self.client.get_state_event(room_id, EventType.ROOM_POWER_LEVELS)
+            pl_content = await self.client.get_state_event(
+                room_id, EventType.ROOM_POWER_LEVELS
+            )
             users: dict = pl_content.get("users", {})
             if users.get(user_id) not in (-1, None):
                 return True  # nicht (mehr) stummgeschaltet
             # Expliziten Eintrag auf 0 setzen (Raumstandard)
             users[user_id] = 0
             pl_content["users"] = users
-            await self.client.send_state_event(room_id, EventType.ROOM_POWER_LEVELS, pl_content)
+            await self.client.send_state_event(
+                room_id, EventType.ROOM_POWER_LEVELS, pl_content
+            )
             self.log.info("Nutzer %s in Raum %s entstummt (PL 0).", user_id, room_id)
             return True
         except Exception:
-            self.log.exception("Entstummen von %s in %s fehlgeschlagen.", user_id, room_id)
+            self.log.exception(
+                "Entstummen von %s in %s fehlgeschlagen.", user_id, room_id
+            )
             return False
 
     async def _auto_unmute_loop(self) -> None:
@@ -1439,7 +1907,8 @@ class URLFilterBot(Plugin):
             await asyncio.sleep(30)
             now = time.monotonic()
             expired = [
-                (uid, rid) for (uid, rid), unmute_at in list(self._active_mutes.items())
+                (uid, rid)
+                for (uid, rid), unmute_at in list(self._active_mutes.items())
                 if unmute_at <= now
             ]
             for user_id, room_id in expired:
@@ -1474,7 +1943,7 @@ class URLFilterBot(Plugin):
         if not meta:
             return None
         title = meta.get("title") or domain
-        desc  = meta.get("description") or ""
+        desc = meta.get("description") or ""
         lines = [f"**{title}**"]
         if desc:
             lines.append(f"> {desc}")
@@ -1516,7 +1985,6 @@ class URLFilterBot(Plugin):
             self.log.error("Linkvorschau für '%s' fehlgeschlagen: %s", domain, exc)
             return None
 
-
     async def _update_previews_for_edit(
         self,
         msg_key: str,
@@ -1554,7 +2022,9 @@ class URLFilterBot(Plugin):
             if domain in remaining_old:
                 old_id = remaining_old.pop(domain)
                 result = await self._post_link_preview(
-                    domain, url, room_id,
+                    domain,
+                    url,
+                    room_id,
                     reply_to_event_id=reply_target_id,
                     edit_preview_event_id=old_id,
                     thread_root_id=thread_root_id,
@@ -1574,7 +2044,9 @@ class URLFilterBot(Plugin):
                 _, old_id = old_pool[reuse_idx]
                 reuse_idx += 1
                 result = await self._post_link_preview(
-                    domain, url, room_id,
+                    domain,
+                    url,
+                    room_id,
                     reply_to_event_id=reply_target_id,
                     edit_preview_event_id=old_id,
                     thread_root_id=thread_root_id,
@@ -1583,7 +2055,9 @@ class URLFilterBot(Plugin):
             else:
                 # Mehr Links als vorher → neue Vorschau senden
                 result = await self._post_link_preview(
-                    domain, url, room_id,
+                    domain,
+                    url,
+                    room_id,
                     reply_to_event_id=reply_target_id,
                     thread_root_id=thread_root_id,
                 )
@@ -1592,8 +2066,9 @@ class URLFilterBot(Plugin):
 
         # Phase 3: Überschüssige alte Vorschauen löschen (weniger Links als vorher)
         for _, old_id in old_pool[reuse_idx:]:
-            await self._redact(room_id, old_id,
-                               reason="Link aus bearbeiteter Nachricht entfernt")
+            await self._redact(
+                room_id, old_id, reason="Link aus bearbeiteter Nachricht entfernt"
+            )
 
         # Map aktualisieren
         if new_map:
@@ -1608,10 +2083,16 @@ class URLFilterBot(Plugin):
     async def _submit_for_review(self, domain: str, evt: MessageEvent) -> None:
         mod_room: str = self.config.get("mod_room_id", "")
         if not mod_room:
-            self.log.warning("mod_room_id nicht konfiguriert — '%s' kann nicht weitergeleitet werden.", domain)
+            self.log.warning(
+                "mod_room_id nicht konfiguriert — '%s' kann nicht weitergeleitet werden.",
+                domain,
+            )
             return
         if domain in self._pending_domains:
-            self.log.info("Domain '%s' hat bereits eine offene Überprüfung — übersprungen.", domain)
+            self.log.info(
+                "Domain '%s' hat bereits eine offene Überprüfung — übersprungen.",
+                domain,
+            )
             return
 
         alert_text = (
@@ -1635,10 +2116,15 @@ class URLFilterBot(Plugin):
         )
         self.pending_reviews[alert_id] = review
         self._pending_domains.add(domain)
-        review.whitelist_reaction_id = await self._send_reaction(mod_room, alert_id, _EMOJI_ALLOW)
-        review.blacklist_reaction_id = await self._send_reaction(mod_room, alert_id, _EMOJI_BLOCK)
-        self.log.info("Überprüfung eingereicht: domain='%s' sender=%s", domain, evt.sender)
-
+        review.whitelist_reaction_id = await self._send_reaction(
+            mod_room, alert_id, _EMOJI_ALLOW
+        )
+        review.blacklist_reaction_id = await self._send_reaction(
+            mod_room, alert_id, _EMOJI_BLOCK
+        )
+        self.log.info(
+            "Überprüfung eingereicht: domain='%s' sender=%s", domain, evt.sender
+        )
 
     # ===========================================================================
     # ABSCHNITT 13 — REAKTIONS-EVENTHANDLER
@@ -1667,24 +2153,31 @@ class URLFilterBot(Plugin):
         elif emoji_key == _EMOJI_BLOCK:
             await self._execute_block(review, target_id, evt.sender)
 
-
     # ===========================================================================
     # ABSCHNITT 14 — MODERATIONSAUSFÜHRUNG
     # ===========================================================================
 
-    async def _execute_allow(self, review: PendingReview, alert_id: EventID, mod_user: UserID) -> None:
-        domain  = review.domain
-        wl_file = os.path.abspath(os.path.join(self.config["whitelist_dir"], "custom.txt"))
+    async def _execute_allow(
+        self, review: PendingReview, alert_id: EventID, mod_user: UserID
+    ) -> None:
+        domain = review.domain
+        wl_file = os.path.abspath(
+            os.path.join(self.config["whitelist_dir"], "custom.txt")
+        )
         try:
             await self._append_to_file(domain, wl_file)
         except PermissionError:
-            await self._send_notice(self.config["mod_room_id"],
+            await self._send_notice(
+                self.config["mod_room_id"],
                 f"❌ **Zugriff verweigert:** Kann nicht in `{wl_file}` schreiben.\n"
-                f"```\nchown -R 1337:1337 ./data/whitelists ./data/blacklists\n```")
+                f"```\nchown -R 1337:1337 ./data/whitelists ./data/blacklists\n```",
+            )
             return
         except Exception as exc:
-            await self._send_notice(self.config["mod_room_id"],
-                f"❌ **Schreibfehler (Whitelist):** `{domain}` — `{type(exc).__name__}: {exc}`")
+            await self._send_notice(
+                self.config["mod_room_id"],
+                f"❌ **Schreibfehler (Whitelist):** `{domain}` — `{type(exc).__name__}: {exc}`",
+            )
             return
 
         self.whitelist_set.add(domain)
@@ -1693,38 +2186,55 @@ class URLFilterBot(Plugin):
         self._pending_domains.discard(domain)
         if self.database is not None:
             await self._delete_logged_links_for_domain(domain)
-        await self._edit_notice(self.config["mod_room_id"], alert_id,
-            f"✅ **Whitelisted** von {mod_user}\nDomain `{domain}` ist jetzt erlaubt.")
-        await self._send_notice(review.original_room_id,
+        await self._edit_notice(
+            self.config["mod_room_id"],
+            alert_id,
+            f"✅ **Whitelisted** von {mod_user}\nDomain `{domain}` ist jetzt erlaubt.",
+        )
+        await self._send_notice(
+            review.original_room_id,
             f"✅ Der Link zu `{domain}` (gesendet von {review.sender}) wurde von den Moderatoren "
-            f"**genehmigt**. Du kannst deine Nachricht erneut senden.")
+            f"**genehmigt**. Du kannst deine Nachricht erneut senden.",
+        )
         self.log.info("Domain '%s' von %s whitelisted.", domain, mod_user)
 
-    async def _execute_block(self, review: PendingReview, alert_id: EventID, mod_user: UserID) -> None:
-        domain  = review.domain
-        bl_file = os.path.abspath(os.path.join(self.config["blacklist_dir"], "custom.txt"))
+    async def _execute_block(
+        self, review: PendingReview, alert_id: EventID, mod_user: UserID
+    ) -> None:
+        domain = review.domain
+        bl_file = os.path.abspath(
+            os.path.join(self.config["blacklist_dir"], "custom.txt")
+        )
         try:
             await self._append_to_file(domain, bl_file)
         except PermissionError:
-            await self._send_notice(self.config["mod_room_id"],
+            await self._send_notice(
+                self.config["mod_room_id"],
                 f"❌ **Zugriff verweigert:** Kann nicht in `{bl_file}` schreiben.\n"
-                f"```\nchown -R 1337:1337 ./data/whitelists ./data/blacklists\n```")
+                f"```\nchown -R 1337:1337 ./data/whitelists ./data/blacklists\n```",
+            )
             return
         except Exception as exc:
-            await self._send_notice(self.config["mod_room_id"],
-                f"❌ **Schreibfehler (Blacklist):** `{domain}` — `{type(exc).__name__}: {exc}`")
+            await self._send_notice(
+                self.config["mod_room_id"],
+                f"❌ **Schreibfehler (Blacklist):** `{domain}` — `{type(exc).__name__}: {exc}`",
+            )
             return
 
         self.blacklist_set.add(domain)
         self.whitelist_set.discard(domain)
         self.pending_reviews.pop(alert_id, None)
         self._pending_domains.discard(domain)
-        await self._edit_notice(self.config["mod_room_id"], alert_id,
-            f"❌ **Blacklisted** von {mod_user}\nDomain `{domain}` ist jetzt gesperrt.")
-        await self._send_notice(review.original_room_id,
-            f"🚫 Ein Link gesendet von {review.sender} wurde von den Moderatoren **gesperrt**.")
+        await self._edit_notice(
+            self.config["mod_room_id"],
+            alert_id,
+            f"❌ **Blacklisted** von {mod_user}\nDomain `{domain}` ist jetzt gesperrt.",
+        )
+        await self._send_notice(
+            review.original_room_id,
+            f"🚫 Ein Link gesendet von {review.sender} wurde von den Moderatoren **gesperrt**.",
+        )
         self.log.info("Domain '%s' von %s blacklisted.", domain, mod_user)
-
 
     # ===========================================================================
     # ABSCHNITT 15 — BEFEHLSHANDLER
@@ -1767,7 +2277,10 @@ class URLFilterBot(Plugin):
     # !allow  [Fix #4: pending sync + wildcard sweep, Fix #6: multi-domain]
     # ---------------------------------------------------------------------------
 
-    @command.new("allow", help="[Mod] Domain(s) whitelisten. Verwendung: !allow <domain> [domain2 ...]")
+    @command.new(
+        "allow",
+        help="[Mod] Domain(s) whitelisten. Verwendung: !allow <domain> [domain2 ...]",
+    )
     @command.argument("domains_raw", pass_raw=True, required=True)
     async def cmd_allow(self, evt: MessageEvent, domains_raw: str) -> None:
         if not await self._is_allowed_command_room(evt.room_id):
@@ -1779,10 +2292,14 @@ class URLFilterBot(Plugin):
         # Fix #6: alle Domains aus dem Argument extrahieren
         domain_list = _split_domain_args(domains_raw)
         if not domain_list:
-            await evt.reply("❌ Verwendung: `!allow <domain>` oder `!allow domain1.com domain2.com`")
+            await evt.reply(
+                "❌ Verwendung: `!allow <domain>` oder `!allow domain1.com domain2.com`"
+            )
             return
 
-        wl_file = os.path.abspath(os.path.join(self.config["whitelist_dir"], "custom.txt"))
+        wl_file = os.path.abspath(
+            os.path.join(self.config["whitelist_dir"], "custom.txt")
+        )
         results: List[str] = []
 
         for domain in domain_list:
@@ -1792,8 +2309,9 @@ class URLFilterBot(Plugin):
             is_wildcard = domain.startswith("*.")
             suffix = domain[2:] if is_wildcard else None
             # Fix #17: Duplikat-Prüfung — Domain bereits auf der Whitelist?
-            if (is_wildcard and suffix in self.whitelist_wildcards) or \
-               (not is_wildcard and domain in self.whitelist_set):
+            if (is_wildcard and suffix in self.whitelist_wildcards) or (
+                not is_wildcard and domain in self.whitelist_set
+            ):
                 results.append(f"ℹ️ `{domain}` ist bereits auf der Whitelist")
                 continue
             try:
@@ -1810,7 +2328,9 @@ class URLFilterBot(Plugin):
                 self.log.info("'%s' manuell von %s whitelisted.", domain, evt.sender)
 
                 # Fix #4: Pending-Reviews für diese Domain (oder passende Subdomains) aufräumen
-                await self._resolve_pending_for_domain(domain, is_whitelist=True, mod_user=evt.sender)
+                await self._resolve_pending_for_domain(
+                    domain, is_whitelist=True, mod_user=evt.sender
+                )
 
             except PermissionError:
                 results.append(f"❌ `{domain}` — Zugriff verweigert auf `{wl_file}`")
@@ -1823,7 +2343,10 @@ class URLFilterBot(Plugin):
     # !block  [Fix #4, Fix #6]
     # ---------------------------------------------------------------------------
 
-    @command.new("block", help="[Mod] Domain(s) blacklisten. Verwendung: !block <domain> [domain2 ...]")
+    @command.new(
+        "block",
+        help="[Mod] Domain(s) blacklisten. Verwendung: !block <domain> [domain2 ...]",
+    )
     @command.argument("domains_raw", pass_raw=True, required=True)
     async def cmd_block(self, evt: MessageEvent, domains_raw: str) -> None:
         if not await self._is_allowed_command_room(evt.room_id):
@@ -1834,10 +2357,14 @@ class URLFilterBot(Plugin):
 
         domain_list = _split_domain_args(domains_raw)
         if not domain_list:
-            await evt.reply("❌ Verwendung: `!block <domain>` oder `!block domain1.com domain2.com`")
+            await evt.reply(
+                "❌ Verwendung: `!block <domain>` oder `!block domain1.com domain2.com`"
+            )
             return
 
-        bl_file = os.path.abspath(os.path.join(self.config["blacklist_dir"], "custom.txt"))
+        bl_file = os.path.abspath(
+            os.path.join(self.config["blacklist_dir"], "custom.txt")
+        )
         results: List[str] = []
 
         for domain in domain_list:
@@ -1847,8 +2374,9 @@ class URLFilterBot(Plugin):
             is_wildcard = domain.startswith("*.")
             suffix = domain[2:] if is_wildcard else None
             # Fix #17: Duplikat-Prüfung — Domain bereits auf der Blacklist?
-            if (is_wildcard and suffix in self.blacklist_wildcards) or \
-               (not is_wildcard and domain in self.blacklist_set):
+            if (is_wildcard and suffix in self.blacklist_wildcards) or (
+                not is_wildcard and domain in self.blacklist_set
+            ):
                 results.append(f"ℹ️ `{domain}` ist bereits auf der Blacklist")
                 continue
             try:
@@ -1863,7 +2391,9 @@ class URLFilterBot(Plugin):
                 self.log.info("'%s' manuell von %s blacklisted.", domain, evt.sender)
 
                 # Fix #4: Pending-Reviews aufräumen
-                await self._resolve_pending_for_domain(domain, is_whitelist=False, mod_user=evt.sender)
+                await self._resolve_pending_for_domain(
+                    domain, is_whitelist=False, mod_user=evt.sender
+                )
 
             except PermissionError:
                 results.append(f"❌ `{domain}` — Zugriff verweigert auf `{bl_file}`")
@@ -1903,11 +2433,17 @@ class URLFilterBot(Plugin):
             # Mod-Raum-Alarm aktualisieren
             if mod_room:
                 if is_whitelist:
-                    await self._edit_notice(mod_room, alert_id,
-                        f"✅ **Whitelisted** von {mod_user} (Befehl)\nDomain `{review.domain}` ist jetzt erlaubt.")
+                    await self._edit_notice(
+                        mod_room,
+                        alert_id,
+                        f"✅ **Whitelisted** von {mod_user} (Befehl)\nDomain `{review.domain}` ist jetzt erlaubt.",
+                    )
                 else:
-                    await self._edit_notice(mod_room, alert_id,
-                        f"❌ **Blacklisted** von {mod_user} (Befehl)\nDomain `{review.domain}` ist jetzt gesperrt.")
+                    await self._edit_notice(
+                        mod_room,
+                        alert_id,
+                        f"❌ **Blacklisted** von {mod_user} (Befehl)\nDomain `{review.domain}` ist jetzt gesperrt.",
+                    )
             # Originalraum benachrichtigen
             if is_whitelist:
                 await self._send_notice(
@@ -1931,13 +2467,17 @@ class URLFilterBot(Plugin):
         if not await self._is_allowed_command_room(evt.room_id):
             return
         if not await self._is_mod(evt.sender, evt.room_id):
-            await evt.reply("❌ Du hast keine Berechtigung, Domains aus der Whitelist zu entfernen.")
+            await evt.reply(
+                "❌ Du hast keine Berechtigung, Domains aus der Whitelist zu entfernen."
+            )
             return
         domain_list = _split_domain_args(domains_raw)
         if not domain_list:
             await evt.reply("❌ Verwendung: `!unallow <domain>` [domain2 ...]")
             return
-        wl_file = os.path.abspath(os.path.join(self.config["whitelist_dir"], "custom.txt"))
+        wl_file = os.path.abspath(
+            os.path.join(self.config["whitelist_dir"], "custom.txt")
+        )
         results: List[str] = []
         for domain in domain_list:
             if not _valid_domain(domain):
@@ -1969,13 +2509,17 @@ class URLFilterBot(Plugin):
         if not await self._is_allowed_command_room(evt.room_id):
             return
         if not await self._is_mod(evt.sender, evt.room_id):
-            await evt.reply("❌ Du hast keine Berechtigung, Domains aus der Blacklist zu entfernen.")
+            await evt.reply(
+                "❌ Du hast keine Berechtigung, Domains aus der Blacklist zu entfernen."
+            )
             return
         domain_list = _split_domain_args(domains_raw)
         if not domain_list:
             await evt.reply("❌ Verwendung: `!unblock <domain>` [domain2 ...]")
             return
-        bl_file = os.path.abspath(os.path.join(self.config["blacklist_dir"], "custom.txt"))
+        bl_file = os.path.abspath(
+            os.path.join(self.config["blacklist_dir"], "custom.txt")
+        )
         results: List[str] = []
         for domain in domain_list:
             if not _valid_domain(domain):
@@ -2001,7 +2545,10 @@ class URLFilterBot(Plugin):
     # !urlstatus  [Fix #6: multi-domain]
     # ---------------------------------------------------------------------------
 
-    @command.new("urlstatus", help="Aktuellen Richtlinienstatus einer oder mehrerer Domains prüfen.")
+    @command.new(
+        "urlstatus",
+        help="Aktuellen Richtlinienstatus einer oder mehrerer Domains prüfen.",
+    )
     @command.argument("domains_raw", pass_raw=True, required=True)
     async def cmd_status(self, evt: MessageEvent, domains_raw: str) -> None:
         if not await self._is_allowed_command_room(evt.room_id):
@@ -2015,13 +2562,25 @@ class URLFilterBot(Plugin):
             if not _valid_domain(domain):
                 results.append(f"❌ `{domain}` — ungültige Domain")
             elif domain in self.whitelist_set:
-                ignored = " · 🔇 Vorschau ignoriert" if domain in self.ignore_preview_set else ""
+                ignored = (
+                    " · 🔇 Vorschau ignoriert"
+                    if domain in self.ignore_preview_set
+                    else ""
+                )
                 results.append(f"✅ `{domain}` ist **whitelisted** (exakt){ignored}")
             elif self._matches_wildcards(domain, self.whitelist_wildcards):
-                ignored = " · 🔇 Vorschau ignoriert" if domain in self.ignore_preview_set else ""
+                ignored = (
+                    " · 🔇 Vorschau ignoriert"
+                    if domain in self.ignore_preview_set
+                    else ""
+                )
                 results.append(f"✅ `{domain}` ist **whitelisted** (Wildcard){ignored}")
             elif self._matches_apex(domain, self.whitelist_set):
-                ignored = " · 🔇 Vorschau ignoriert" if domain in self.ignore_preview_set else ""
+                ignored = (
+                    " · 🔇 Vorschau ignoriert"
+                    if domain in self.ignore_preview_set
+                    else ""
+                )
                 results.append(f"✅ `{domain}` ist **whitelisted** (Apex){ignored}")
             elif domain in self.blacklist_set:
                 results.append(f"🚫 `{domain}` ist **blacklisted** (exakt)")
@@ -2030,7 +2589,11 @@ class URLFilterBot(Plugin):
             elif self._matches_apex(domain, self.blacklist_set):
                 results.append(f"🚫 `{domain}` ist **blacklisted** (Apex)")
             else:
-                ignored = " · 🔇 Vorschau ignoriert" if domain in self.ignore_preview_set else ""
+                ignored = (
+                    " · 🔇 Vorschau ignoriert"
+                    if domain in self.ignore_preview_set
+                    else ""
+                )
                 results.append(f"❓ `{domain}` ist **unbekannt**{ignored}")
         await evt.reply("\n".join(results))
 
@@ -2045,14 +2608,17 @@ class URLFilterBot(Plugin):
         if not await self._is_mod(evt.sender, evt.room_id):
             await evt.reply("❌ Du hast keine Berechtigung, Listen neu zu laden.")
             return
-        self.log.info("🔄 !reloadlists aufgerufen von %s in %s", evt.sender, evt.room_id)
+        self.log.info(
+            "🔄 !reloadlists aufgerufen von %s in %s", evt.sender, evt.room_id
+        )
         old_bl = len(self.blacklist_set)
         old_wl = len(self.whitelist_set)
         old_bl_wc = len(self.blacklist_wildcards)
         old_wl_wc = len(self.whitelist_wildcards)
         await evt.reply("🔄 Listen werden neu geladen – dauert ca. 30 Sek. ...")
         await self._reload_lists()
-        await self._send_notice(evt.room_id,
+        await self._send_notice(
+            evt.room_id,
             f"🏁 Neuladen abgeschlossen.\n"
             f"Blacklist: **{old_bl:,}** → **{len(self.blacklist_set):,}** "
             f"(Wildcards: {old_bl_wc} → {len(self.blacklist_wildcards)})\n"
@@ -2070,7 +2636,9 @@ class URLFilterBot(Plugin):
         if not await self._is_allowed_command_room(evt.room_id):
             return
         if not await self._is_mod(evt.sender, evt.room_id):
-            await evt.reply("❌ Du hast keine Berechtigung, ausstehende Überprüfungen einzusehen.")
+            await evt.reply(
+                "❌ Du hast keine Berechtigung, ausstehende Überprüfungen einzusehen."
+            )
             return
         if not self.pending_reviews:
             await evt.reply("✅ Keine ausstehenden URL-Überprüfungen.")
@@ -2088,7 +2656,10 @@ class URLFilterBot(Plugin):
     # !sendpending  [Fix #11]
     # ---------------------------------------------------------------------------
 
-    @command.new("sendpending", help="[Mod] Alle offenen Überprüfungsalarme im Mod-Raum neu senden.")
+    @command.new(
+        "sendpending",
+        help="[Mod] Alle offenen Überprüfungsalarme im Mod-Raum neu senden.",
+    )
     async def cmd_sendpending(self, evt: MessageEvent) -> None:
         """
         Fix #11: Sendet alle offenen pending_reviews-Alarme neu in den Mod-Raum.
@@ -2100,7 +2671,9 @@ class URLFilterBot(Plugin):
         if not await self._is_mod(evt.sender, evt.room_id):
             await evt.reply("❌ Du hast keine Berechtigung.")
             return
-        self.log.info("📤 !sendpending aufgerufen von %s in %s", evt.sender, evt.room_id)
+        self.log.info(
+            "📤 !sendpending aufgerufen von %s in %s", evt.sender, evt.room_id
+        )
         if not self.pending_reviews:
             await evt.reply("✅ Keine ausstehenden Überprüfungen.")
             return
@@ -2124,7 +2697,9 @@ class URLFilterBot(Plugin):
                 f"Reagiere mit {_EMOJI_ALLOW} zum **Whitelisten** oder {_EMOJI_BLOCK} zum **Blacklisten**.\n"
                 f"Oder verwende: `!allow {review.domain}` / `!block {review.domain}`"
             )
-            new_alert_id = await self._send_notice(mod_room, alert_text, render_markdown=True)
+            new_alert_id = await self._send_notice(
+                mod_room, alert_text, render_markdown=True
+            )
             if not new_alert_id:
                 failed += 1
                 continue
@@ -2140,8 +2715,12 @@ class URLFilterBot(Plugin):
             )
             self.pending_reviews[new_alert_id] = new_review
             # Reaktionsknöpfe neu hinzufügen
-            new_review.whitelist_reaction_id = await self._send_reaction(mod_room, new_alert_id, _EMOJI_ALLOW)
-            new_review.blacklist_reaction_id = await self._send_reaction(mod_room, new_alert_id, _EMOJI_BLOCK)
+            new_review.whitelist_reaction_id = await self._send_reaction(
+                mod_room, new_alert_id, _EMOJI_ALLOW
+            )
+            new_review.blacklist_reaction_id = await self._send_reaction(
+                mod_room, new_alert_id, _EMOJI_BLOCK
+            )
             resent += 1
 
         msg = f"✅ {resent} Überprüfung(en) neu gesendet."
@@ -2153,7 +2732,10 @@ class URLFilterBot(Plugin):
     # !mute  [Fix #10]
     # ---------------------------------------------------------------------------
 
-    @command.new("mute", help="[Mod] Nutzer stummschalten. Verwendung: !mute <@user:server> [-t Minuten]")
+    @command.new(
+        "mute",
+        help="[Mod] Nutzer stummschalten. Verwendung: !mute <@user:server> [-t Minuten]",
+    )
     @command.argument("args_raw", pass_raw=True, required=True)
     async def cmd_mute(self, evt: MessageEvent, args_raw: str) -> None:
         """
@@ -2188,17 +2770,32 @@ class URLFilterBot(Plugin):
         target_room = str(evt.room_id)
         success = await self._mute_user(user_id, target_room, duration_minutes)
         if success:
-            dur_text = _format_age(duration_minutes * 60) if duration_minutes > 0 else "unbegrenzt"
+            dur_text = (
+                _format_age(duration_minutes * 60)
+                if duration_minutes > 0
+                else "unbegrenzt"
+            )
             await evt.reply(f"🔇 `{user_id}` wurde für {dur_text} stummgeschaltet.")
-            self.log.info("Manuelles Mute: %s in %s für %s min von %s.", user_id, target_room, duration_minutes, evt.sender)
+            self.log.info(
+                "Manuelles Mute: %s in %s für %s min von %s.",
+                user_id,
+                target_room,
+                duration_minutes,
+                evt.sender,
+            )
         else:
-            await evt.reply(f"❌ Stummschalten von `{user_id}` fehlgeschlagen. Prüfe die Bot-Berechtigungen und die Logs.")
+            await evt.reply(
+                f"❌ Stummschalten von `{user_id}` fehlgeschlagen. Prüfe die Bot-Berechtigungen und die Logs."
+            )
 
     # ---------------------------------------------------------------------------
     # !unmute  [Fix #10]
     # ---------------------------------------------------------------------------
 
-    @command.new("unmute", help="[Mod] Stummschaltung aufheben. Verwendung: !unmute <@user:server>")
+    @command.new(
+        "unmute",
+        help="[Mod] Stummschaltung aufheben. Verwendung: !unmute <@user:server>",
+    )
     @command.argument("args_raw", pass_raw=True, required=True)
     async def cmd_unmute(self, evt: MessageEvent, args_raw: str) -> None:
         """
@@ -2211,7 +2808,9 @@ class URLFilterBot(Plugin):
         if not self.config.get("mute_commands_enabled", True):
             return
         if not await self._is_mod(evt.sender, evt.room_id):
-            await evt.reply("❌ Du hast keine Berechtigung, Stummschaltungen aufzuheben.")
+            await evt.reply(
+                "❌ Du hast keine Berechtigung, Stummschaltungen aufzuheben."
+            )
             return
 
         user_id, _ = _parse_user_time_args(args_raw)
@@ -2226,15 +2825,21 @@ class URLFilterBot(Plugin):
         success = await self._do_unmute_user(user_id, target_room)
         if success:
             await evt.reply(f"🔊 `{user_id}` wurde entstummt.")
-            self.log.info("Manuelles Unmute: %s in %s von %s.", user_id, target_room, evt.sender)
+            self.log.info(
+                "Manuelles Unmute: %s in %s von %s.", user_id, target_room, evt.sender
+            )
         else:
-            await evt.reply(f"❌ Entstummen von `{user_id}` fehlgeschlagen. Prüfe die Logs.")
+            await evt.reply(
+                f"❌ Entstummen von `{user_id}` fehlgeschlagen. Prüfe die Logs."
+            )
 
     # ---------------------------------------------------------------------------
     # !liststats
     # ---------------------------------------------------------------------------
 
-    @command.new("liststats", help="Aktuelle Listengrößen und Bot-Statistiken anzeigen.")
+    @command.new(
+        "liststats", help="Aktuelle Listengrößen und Bot-Statistiken anzeigen."
+    )
     async def cmd_stats(self, evt: MessageEvent) -> None:
         if not await self._is_allowed_command_room(evt.room_id):
             return
@@ -2260,7 +2865,9 @@ class URLFilterBot(Plugin):
         except Exception:
             is_dm = False
         if not is_dm:
-            await evt.reply("ℹ️ Der Befehl `!hilfe` ist **nur per Direktnachricht** verfügbar.")
+            await evt.reply(
+                "ℹ️ Der Befehl `!hilfe` ist **nur per Direktnachricht** verfügbar."
+            )
             return
 
         help_text = (
@@ -2318,7 +2925,8 @@ class URLFilterBot(Plugin):
             return
         try:
             count = await self.database.fetchval(
-                "SELECT COUNT(*) FROM link_log WHERE sender = $1", user_id,
+                "SELECT COUNT(*) FROM link_log WHERE sender = $1",
+                user_id,
             )
         except Exception:
             self.log.exception("Datenbankfehler bei !stats für %s.", user_id)
@@ -2330,18 +2938,22 @@ class URLFilterBot(Plugin):
             f"Protokollierte (nicht genehmigte) Links: **{count}**",
         )
 
-
     # ---------------------------------------------------------------------------
     # !ignore
     # ---------------------------------------------------------------------------
 
-    @command.new("ignore", help="[Mod] Domain zur Vorschau-Ignore-Liste hinzufügen. Keine Linkvorschau mehr für diese Domain.")
+    @command.new(
+        "ignore",
+        help="[Mod] Domain zur Vorschau-Ignore-Liste hinzufügen. Keine Linkvorschau mehr für diese Domain.",
+    )
     @command.argument("domains_raw", pass_raw=True, required=True)
     async def cmd_ignore(self, evt: MessageEvent, domains_raw: str) -> None:
         if not await self._is_allowed_command_room(evt.room_id):
             return
         if not await self._is_mod(evt.sender, evt.room_id):
-            await evt.reply("❌ Du hast keine Berechtigung, Domains zur Ignore-Liste hinzuzufügen.")
+            await evt.reply(
+                "❌ Du hast keine Berechtigung, Domains zur Ignore-Liste hinzuzufügen."
+            )
             return
         domain_list = _split_domain_args(domains_raw)
         if not domain_list:
@@ -2373,10 +2985,16 @@ class URLFilterBot(Plugin):
                         f"(Vorschauen werden nur für whitelistete Domains erstellt)"
                     )
                 else:
-                    results.append(f"🔇 `{domain}` zur Ignore-Liste hinzugefügt (keine Linkvorschau mehr)")
-                self.log.info("'%s' zur Ignore-Liste hinzugefügt von %s.", domain, evt.sender)
+                    results.append(
+                        f"🔇 `{domain}` zur Ignore-Liste hinzugefügt (keine Linkvorschau mehr)"
+                    )
+                self.log.info(
+                    "'%s' zur Ignore-Liste hinzugefügt von %s.", domain, evt.sender
+                )
             except PermissionError:
-                results.append(f"❌ `{domain}` — Zugriff verweigert auf `{ignore_file}`")
+                results.append(
+                    f"❌ `{domain}` — Zugriff verweigert auf `{ignore_file}`"
+                )
             except Exception as exc:
                 results.append(f"❌ `{domain}` — Fehler: `{type(exc).__name__}: {exc}`")
         await evt.reply("\n".join(results))
@@ -2385,13 +3003,17 @@ class URLFilterBot(Plugin):
     # !unignore
     # ---------------------------------------------------------------------------
 
-    @command.new("unignore", help="[Mod] Domain von der Vorschau-Ignore-Liste entfernen.")
+    @command.new(
+        "unignore", help="[Mod] Domain von der Vorschau-Ignore-Liste entfernen."
+    )
     @command.argument("domains_raw", pass_raw=True, required=True)
     async def cmd_unignore(self, evt: MessageEvent, domains_raw: str) -> None:
         if not await self._is_allowed_command_room(evt.room_id):
             return
         if not await self._is_mod(evt.sender, evt.room_id):
-            await evt.reply("❌ Du hast keine Berechtigung, Domains von der Ignore-Liste zu entfernen.")
+            await evt.reply(
+                "❌ Du hast keine Berechtigung, Domains von der Ignore-Liste zu entfernen."
+            )
             return
         domain_list = _split_domain_args(domains_raw)
         if not domain_list:
@@ -2410,10 +3032,16 @@ class URLFilterBot(Plugin):
             try:
                 await self._remove_from_file(domain, ignore_file)
                 self.ignore_preview_set.discard(domain)
-                results.append(f"✅ `{domain}` von der Ignore-Liste entfernt (Linkvorschauen wieder aktiv)")
-                self.log.info("'%s' von Ignore-Liste entfernt von %s.", domain, evt.sender)
+                results.append(
+                    f"✅ `{domain}` von der Ignore-Liste entfernt (Linkvorschauen wieder aktiv)"
+                )
+                self.log.info(
+                    "'%s' von Ignore-Liste entfernt von %s.", domain, evt.sender
+                )
             except PermissionError:
-                results.append(f"❌ `{domain}` — Zugriff verweigert auf `{ignore_file}`")
+                results.append(
+                    f"❌ `{domain}` — Zugriff verweigert auf `{ignore_file}`"
+                )
             except Exception as exc:
                 results.append(f"❌ `{domain}` — Fehler: `{type(exc).__name__}: {exc}`")
         await evt.reply("\n".join(results))
@@ -2435,10 +3063,10 @@ class URLFilterBot(Plugin):
              Damit kann kein Nutzer durch Einladung des Bots in einen eigenen
              Raum Admin-Rechte erlangen.
         """
-        mod_cfg      = self.config.get("mod_permissions", {})
+        mod_cfg = self.config.get("mod_permissions", {})
         allowed_list = mod_cfg.get("allowed_users", [])
-        min_level    = int(mod_cfg.get("min_power_level", 50))
-        mod_room     = str(self.config.get("mod_room_id", ""))
+        min_level = int(mod_cfg.get("min_power_level", 50))
+        mod_room = str(self.config.get("mod_room_id", ""))
 
         if not isinstance(allowed_list, list):
             self.log.warning(
@@ -2470,10 +3098,13 @@ class URLFilterBot(Plugin):
                 user_level = int(default) if default is not None else 0
             return int(user_level)
         except Exception as exc:
-            self.log.warning("Powerlevel für %s in %s konnte nicht abgerufen werden: %s", user_id, room_id, exc)
+            self.log.warning(
+                "Powerlevel für %s in %s konnte nicht abgerufen werden: %s",
+                user_id,
+                room_id,
+                exc,
+            )
             return 0
-
-
 
     # ===========================================================================
     # ABSCHNITT 17 — LINKVORSCHAU (OG-METADATEN)
@@ -2522,7 +3153,7 @@ class URLFilterBot(Plugin):
                         return None
                     if "text/html" not in resp.headers.get("Content-Type", ""):
                         return None
-                    raw  = await resp.content.read(65_536)
+                    raw = await resp.content.read(65_536)
                     html = raw.decode("utf-8", errors="replace")
         except asyncio.TimeoutError:
             self.log.debug("Linkvorschau-Timeout für %s", url)
@@ -2535,11 +3166,10 @@ class URLFilterBot(Plugin):
             return None
 
         title = _og_tag(html, "og:title") or _html_title(html)
-        desc  = _og_tag(html, "og:description") or _meta_name(html, "description")
+        desc = _og_tag(html, "og:description") or _meta_name(html, "description")
         if not title and not desc:
             return None
         return {"title": (title or "").strip(), "description": (desc or "").strip()}
-
 
     # ===========================================================================
     # ABSCHNITT 18 — MATRIX-NACHRICHTENDIENSTPROGRAMME
@@ -2552,7 +3182,9 @@ class URLFilterBot(Plugin):
         except Exception as exc:
             self.log.warning(
                 "LÖSCHEN FEHLGESCHLAGEN: ereignis=%s raum=%s Fehler: %s — Bot benötigt PL 50+.",
-                event_id, room_id, exc,
+                event_id,
+                room_id,
+                exc,
             )
             return False
 
@@ -2570,14 +3202,21 @@ class URLFilterBot(Plugin):
             return await self.client.send_message(room_id, content)
         except Exception as exc:
             exc_str = str(exc)
-            if "403" in exc_str or "M_FORBIDDEN" in exc_str.upper() or "MForbidden" in exc_str:
+            if (
+                "403" in exc_str
+                or "M_FORBIDDEN" in exc_str.upper()
+                or "MForbidden" in exc_str
+            ):
                 self.log.error(
                     "FEHLER: Bot kann nicht in Raum %s senden (403). "
                     "Bot einladen und Senderechte prüfen. mod_room_id=%s",
-                    room_id, self.config.get("mod_room_id", "<nicht gesetzt>"),
+                    room_id,
+                    self.config.get("mod_room_id", "<nicht gesetzt>"),
                 )
             else:
-                self.log.error("Hinweis an %s konnte nicht gesendet werden: %s", room_id, exc)
+                self.log.error(
+                    "Hinweis an %s konnte nicht gesendet werden: %s", room_id, exc
+                )
             return None
 
     async def _edit_notice(
@@ -2618,7 +3257,10 @@ class URLFilterBot(Plugin):
                 return True
             except Exception as exc:
                 self.log.warning(
-                    "Edit-Versuch für %s in %s fehlgeschlagen: %s", event_id, room_id, exc
+                    "Edit-Versuch für %s in %s fehlgeschlagen: %s",
+                    event_id,
+                    room_id,
+                    exc,
                 )
                 return False
 
@@ -2634,7 +3276,8 @@ class URLFilterBot(Plugin):
         # Fix #3: Fallback — neue Nachricht senden wenn beide Versuche scheitern
         self.log.error(
             "Edit für %s in %s nach 2 Versuchen fehlgeschlagen — sende neue Nachricht.",
-            event_id, room_id,
+            event_id,
+            room_id,
         )
         await self._send_notice(room_id, new_text, render_markdown=True)
 
@@ -2654,9 +3297,10 @@ class URLFilterBot(Plugin):
                 },
             )
         except Exception as exc:
-            self.log.error("Reaktion '%s' auf %s fehlgeschlagen: %s", key, target_id, exc)
+            self.log.error(
+                "Reaktion '%s' auf %s fehlgeschlagen: %s", key, target_id, exc
+            )
             return None
-
 
     # ===========================================================================
     # ABSCHNITT 19 — DATEI-E/A-DIENSTPROGRAMM
@@ -2675,11 +3319,14 @@ class URLFilterBot(Plugin):
                 self.log.exception(
                     "ZUGRIFF VERWEIGERT: '%s' → '%s'. "
                     "Fix: chown -R 1337:1337 ./data/blacklists ./data/whitelists",
-                    domain, abs_filepath,
+                    domain,
+                    abs_filepath,
                 )
                 raise
             except Exception:
-                self.log.exception("SCHREIBEN FEHLGESCHLAGEN: '%s' → '%s'.", domain, abs_filepath)
+                self.log.exception(
+                    "SCHREIBEN FEHLGESCHLAGEN: '%s' → '%s'.", domain, abs_filepath
+                )
                 raise
         self.log.debug("'%s' an '%s' angehängt.", domain, abs_filepath)
 
@@ -2714,13 +3361,16 @@ class URLFilterBot(Plugin):
                 with open(abs_filepath, "w", encoding="utf-8") as fh:
                     fh.writelines(new_lines)
             except PermissionError:
-                self.log.exception("ZUGRIFF VERWEIGERT: '%s' aus '%s' entfernen.", domain, abs_filepath)
+                self.log.exception(
+                    "ZUGRIFF VERWEIGERT: '%s' aus '%s' entfernen.", domain, abs_filepath
+                )
                 raise
             except Exception:
-                self.log.exception("ENTFERNEN FEHLGESCHLAGEN: '%s' aus '%s'.", domain, abs_filepath)
+                self.log.exception(
+                    "ENTFERNEN FEHLGESCHLAGEN: '%s' aus '%s'.", domain, abs_filepath
+                )
                 raise
         self.log.debug("'%s' aus '%s' entfernt.", domain, abs_filepath)
-
 
     # ===========================================================================
     # ABSCHNITT 19b — DATENBANK-HILFSMETHODEN
@@ -2730,16 +3380,24 @@ class URLFilterBot(Plugin):
         try:
             await self.database.execute(
                 "INSERT INTO link_log (sender, url, domain) VALUES ($1, $2, $3)",
-                str(sender), url, domain,
+                str(sender),
+                url,
+                domain,
             )
         except Exception:
-            self.log.exception("Datenbankfehler beim Protokollieren von Link '%s'.", url)
+            self.log.exception(
+                "Datenbankfehler beim Protokollieren von Link '%s'.", url
+            )
 
     async def _delete_logged_links_for_domain(self, domain: str) -> None:
         try:
-            await self.database.execute("DELETE FROM link_log WHERE domain = $1", domain)
+            await self.database.execute(
+                "DELETE FROM link_log WHERE domain = $1", domain
+            )
         except Exception:
-            self.log.exception("Datenbankfehler beim Löschen von Link-Log für Domain '%s'.", domain)
+            self.log.exception(
+                "Datenbankfehler beim Löschen von Link-Log für Domain '%s'.", domain
+            )
 
     async def _cleanup_loop(self) -> None:
         self.log.debug("Bereinigungsloop gestartet.")
@@ -2755,10 +3413,13 @@ class URLFilterBot(Plugin):
             return
         cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=days)
         try:
-            await self.database.execute("DELETE FROM link_log WHERE logged_at < $1", cutoff)
+            await self.database.execute(
+                "DELETE FROM link_log WHERE logged_at < $1", cutoff
+            )
             self.log.info(
                 "Link-Log-Bereinigung: Einträge älter als %d Tage gelöscht (cutoff: %s UTC).",
-                days, cutoff.strftime("%Y-%m-%d %H:%M"),
+                days,
+                cutoff.strftime("%Y-%m-%d %H:%M"),
             )
         except Exception:
             self.log.exception("Datenbankfehler bei Link-Log-Bereinigung.")
@@ -2767,6 +3428,7 @@ class URLFilterBot(Plugin):
 # ===========================================================================
 # ABSCHNITT 20 — MODULGLOBALE HILFSFUNKTIONEN
 # ===========================================================================
+
 
 def _list_txt_files(directory: str) -> List[str]:
     """Gibt sortierte absolute Pfade aller .txt-Dateien in `directory` zurück."""
@@ -2884,8 +3546,11 @@ def _og_tag(html: str, prop: str) -> Optional[str]:
     p = re.escape(prop)
     m = re.search(
         r'<meta[^>]+property=["\']' + p + r'["\'][^>]+content=["\']([^"\']{1,512})["\']'
-        r'|<meta[^>]+content=["\']([^"\']{1,512})["\'][^>]+property=["\']' + p + r'["\']',
-        html, re.IGNORECASE,
+        r'|<meta[^>]+content=["\']([^"\']{1,512})["\'][^>]+property=["\']'
+        + p
+        + r'["\']',
+        html,
+        re.IGNORECASE,
     )
     if m:
         return (m.group(1) or m.group(2) or "").strip() or None
@@ -2898,7 +3563,8 @@ def _meta_name(html: str, name: str) -> Optional[str]:
     m = re.search(
         r'<meta[^>]+name=["\']' + n + r'["\'][^>]+content=["\']([^"\']{1,512})["\']'
         r'|<meta[^>]+content=["\']([^"\']{1,512})["\'][^>]+name=["\']' + n + r'["\']',
-        html, re.IGNORECASE,
+        html,
+        re.IGNORECASE,
     )
     if m:
         return (m.group(1) or m.group(2) or "").strip() or None
@@ -2948,7 +3614,7 @@ def _md_to_html(text: str) -> str:
     # Sicherheitsfix: " in href wird zu &quot; kodiert (verhindert Attribut-Injection).
     def _safe_link_sub(m: re.Match) -> str:
         label = m.group(1)  # & < > bereits kodiert durch Schritt 1
-        href  = m.group(2).replace('"', "&quot;")
+        href = m.group(2).replace('"', "&quot;")
         return f'<a href="{href}">{label}</a>'
 
     text = re.sub(
