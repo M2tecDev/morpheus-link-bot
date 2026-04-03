@@ -1051,7 +1051,7 @@ class URLFilterBot(Plugin):
                 "🚨 PLUGIN NICHT GESTARTET: secret_salt ist nicht konfiguriert oder "
                 "enthält noch den Standardwert. Bitte in der Instanzkonfiguration "
                 "einen zufälligen Salt setzen: "
-                "python3 -c \"import secrets; print(secrets.token_hex(32))\""
+                'python3 -c "import secrets; print(secrets.token_hex(32))"'
             )
             raise ValueError(
                 "secret_salt ist nicht gesetzt oder enthält noch den Standardwert. "
@@ -2199,7 +2199,9 @@ class URLFilterBot(Plugin):
     ) -> None:
         domain = review.domain
         try:
-            await self._db_upsert_domain_rule(domain, is_blacklisted=False, ignore_preview=False)
+            await self._db_upsert_domain_rule(
+                domain, is_blacklisted=False, ignore_preview=False
+            )
         except Exception as exc:
             await self._send_notice(
                 self.config["mod_room_id"],
@@ -2214,7 +2216,9 @@ class URLFilterBot(Plugin):
         try:
             await self._db_delete_pending_review(str(alert_id))
         except Exception as exc:
-            self.log.debug("PendingReview-DB-Löschen nach Allow fehlgeschlagen: %s", exc)
+            self.log.debug(
+                "PendingReview-DB-Löschen nach Allow fehlgeschlagen: %s", exc
+            )
         await self._edit_notice(
             self.config["mod_room_id"],
             alert_id,
@@ -2232,7 +2236,9 @@ class URLFilterBot(Plugin):
     ) -> None:
         domain = review.domain
         try:
-            await self._db_upsert_domain_rule(domain, is_blacklisted=True, ignore_preview=False)
+            await self._db_upsert_domain_rule(
+                domain, is_blacklisted=True, ignore_preview=False
+            )
         except Exception as exc:
             await self._send_notice(
                 self.config["mod_room_id"],
@@ -2247,7 +2253,9 @@ class URLFilterBot(Plugin):
         try:
             await self._db_delete_pending_review(str(alert_id))
         except Exception as exc:
-            self.log.debug("PendingReview-DB-Löschen nach Block fehlgeschlagen: %s", exc)
+            self.log.debug(
+                "PendingReview-DB-Löschen nach Block fehlgeschlagen: %s", exc
+            )
         await self._edit_notice(
             self.config["mod_room_id"],
             alert_id,
@@ -2355,7 +2363,9 @@ class URLFilterBot(Plugin):
                 )
 
             except Exception as exc:
-                results.append(f"❌ `{domain}` — Datenbankfehler: `{type(exc).__name__}: {exc}`")
+                results.append(
+                    f"❌ `{domain}` — Datenbankfehler: `{type(exc).__name__}: {exc}`"
+                )
 
         await evt.reply("\n".join(results))
 
@@ -2415,7 +2425,9 @@ class URLFilterBot(Plugin):
                 )
 
             except Exception as exc:
-                results.append(f"❌ `{domain}` — Datenbankfehler: `{type(exc).__name__}: {exc}`")
+                results.append(
+                    f"❌ `{domain}` — Datenbankfehler: `{type(exc).__name__}: {exc}`"
+                )
 
         await evt.reply("\n".join(results))
 
@@ -2513,7 +2525,9 @@ class URLFilterBot(Plugin):
                 results.append(f"✅ `{domain}` aus der Whitelist entfernt")
                 self.log.info("'%s' aus Whitelist entfernt von %s.", domain, evt.sender)
             except Exception as exc:
-                results.append(f"❌ `{domain}` — Datenbankfehler: `{type(exc).__name__}: {exc}`")
+                results.append(
+                    f"❌ `{domain}` — Datenbankfehler: `{type(exc).__name__}: {exc}`"
+                )
         await evt.reply("\n".join(results))
 
     # ---------------------------------------------------------------------------
@@ -2550,7 +2564,9 @@ class URLFilterBot(Plugin):
                 results.append(f"✅ `{domain}` aus der Blacklist entfernt")
                 self.log.info("'%s' aus Blacklist entfernt von %s.", domain, evt.sender)
             except Exception as exc:
-                results.append(f"❌ `{domain}` — Datenbankfehler: `{type(exc).__name__}: {exc}`")
+                results.append(
+                    f"❌ `{domain}` — Datenbankfehler: `{type(exc).__name__}: {exc}`"
+                )
         await evt.reply("\n".join(results))
 
     # ---------------------------------------------------------------------------
@@ -2700,7 +2716,9 @@ class URLFilterBot(Plugin):
         failed = 0
 
         for old_alert_id, review in old_reviews:
-            sender_display = review.sender if review.sender else "(Unbekannt — Bot neugestartet)"
+            sender_display = (
+                review.sender if review.sender else "(Unbekannt — Bot neugestartet)"
+            )
             alert_text = (
                 f"🔔 **URL-Überprüfung erforderlich** *(erneut gesendet)*\n\n"
                 f"**Absender:** {sender_display}\n"
@@ -2723,7 +2741,9 @@ class URLFilterBot(Plugin):
             try:
                 await self._db_delete_pending_review(str(old_alert_id))
             except Exception as exc:
-                self.log.debug("PendingReview-DB-Löschen (sendpending) fehlgeschlagen: %s", exc)
+                self.log.debug(
+                    "PendingReview-DB-Löschen (sendpending) fehlgeschlagen: %s", exc
+                )
 
             new_review = PendingReview(
                 domain=review.domain,
@@ -2742,7 +2762,9 @@ class URLFilterBot(Plugin):
                     review.domain,
                 )
             except Exception as exc:
-                self.log.debug("PendingReview-DB-Schreiben (sendpending) fehlgeschlagen: %s", exc)
+                self.log.debug(
+                    "PendingReview-DB-Schreiben (sendpending) fehlgeschlagen: %s", exc
+                )
             # Reaktionsknöpfe neu hinzufügen
             new_review.whitelist_reaction_id = await self._send_reaction(
                 mod_room, new_alert_id, _EMOJI_ALLOW
@@ -2890,7 +2912,9 @@ class URLFilterBot(Plugin):
     # !status  — Bot-Gesundheitscheck
     # ---------------------------------------------------------------------------
 
-    @command.new("status", help="Bot-Status, Latenz, Datenbankverbindung und Version anzeigen.")
+    @command.new(
+        "status", help="Bot-Status, Latenz, Datenbankverbindung und Version anzeigen."
+    )
     async def cmd_botstatus(self, evt: MessageEvent) -> None:
         if not await self._is_allowed_command_room(evt.room_id):
             return
@@ -3049,7 +3073,9 @@ class URLFilterBot(Plugin):
                     "'%s' zur Ignore-Liste hinzugefügt von %s.", domain, evt.sender
                 )
             except Exception as exc:
-                results.append(f"❌ `{domain}` — Datenbankfehler: `{type(exc).__name__}: {exc}`")
+                results.append(
+                    f"❌ `{domain}` — Datenbankfehler: `{type(exc).__name__}: {exc}`"
+                )
         await evt.reply("\n".join(results))
 
     # ---------------------------------------------------------------------------
@@ -3090,7 +3116,9 @@ class URLFilterBot(Plugin):
                     "'%s' von Ignore-Liste entfernt von %s.", domain, evt.sender
                 )
             except Exception as exc:
-                results.append(f"❌ `{domain}` — Datenbankfehler: `{type(exc).__name__}: {exc}`")
+                results.append(
+                    f"❌ `{domain}` — Datenbankfehler: `{type(exc).__name__}: {exc}`"
+                )
         await evt.reply("\n".join(results))
 
     # ===========================================================================
@@ -3422,7 +3450,8 @@ class URLFilterBot(Plugin):
                 self.blacklist_set.discard(domain)
 
         self.log.info(
-            "📦 DomainRule-Cache: %d Einträge aus DB geladen.", len(self._domain_rule_cache)
+            "📦 DomainRule-Cache: %d Einträge aus DB geladen.",
+            len(self._domain_rule_cache),
         )
 
     async def _load_pending_reviews_from_db(self) -> None:
@@ -3489,7 +3518,9 @@ class URLFilterBot(Plugin):
         }
         self.log.debug(
             "DomainRule UPSERT: domain=%s is_bl=%s ignore_pv=%s",
-            clean, is_blacklisted, ignore_preview,
+            clean,
+            is_blacklisted,
+            ignore_preview,
         )
 
     async def _db_upsert_ignore_preview(self, domain: str, ignore: bool) -> None:
@@ -3508,9 +3539,7 @@ class URLFilterBot(Plugin):
         Kein Fehler wenn der Eintrag nicht existiert.
         """
         clean = self._sanitize_domain_for_storage(domain)
-        await self.database.execute(
-            "DELETE FROM domain_rule WHERE domain = $1", clean
-        )
+        await self.database.execute("DELETE FROM domain_rule WHERE domain = $1", clean)
         self._domain_rule_cache.pop(clean, None)
         self.log.debug("DomainRule gelöscht: domain=%s", clean)
 
@@ -3599,8 +3628,7 @@ class URLFilterBot(Plugin):
             )
             # Verstöße im Beobachtungsfenster zählen
             count = await self.database.fetchval(
-                "SELECT COUNT(*) FROM user_violation "
-                "WHERE user_hash = $1 AND ts >= $2",
+                "SELECT COUNT(*) FROM user_violation WHERE user_hash = $1 AND ts >= $2",
                 user_hash,
                 cutoff,
             )
@@ -3625,10 +3653,9 @@ class URLFilterBot(Plugin):
         """
         self.log.debug("🔒 DSGVO-Datenhaltungs-Loop gestartet.")
         while True:
-            cutoff = (
-                datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
-                - datetime.timedelta(hours=24)
-            )
+            cutoff = datetime.datetime.now(datetime.timezone.utc).replace(
+                tzinfo=None
+            ) - datetime.timedelta(hours=24)
             try:
                 await self.database.execute(
                     "DELETE FROM user_violation WHERE ts < $1", cutoff
@@ -3642,6 +3669,7 @@ class URLFilterBot(Plugin):
                     "Fehler beim Bereinigen alter UserViolation-Einträge: %s", exc
                 )
             await asyncio.sleep(86_400)  # 24 Stunden
+
 
 # ===========================================================================
 # ABSCHNITT 20 — MODULGLOBALE HILFSFUNKTIONEN
@@ -3661,7 +3689,6 @@ def _list_txt_files(directory: str) -> List[str]:
         for fn in os.listdir(directory)
         if fn.endswith(".txt")
     )
-
 
 
 def _split_domain_args(raw: str) -> List[str]:
