@@ -1,5 +1,5 @@
 """
-URL-Filter-Bot — Hochleistungsedition  (v2.3.1)
+URL-Filter-Bot — Hochleistungsedition  (v2.4.0)
 ============================================
 
 Designziele
@@ -15,25 +15,11 @@ Designziele
 4. **ReDoS-sicherer Regex**: Der URL-Extraktions-Regex verwendet eine einzige, flache
    Zeichenklasse ohne geschachtelte Quantifizierer oder überlappende Alternativen, was
    katastrophales Backtracking mathematisch unmöglich macht.
-5. **Threadsicheres Schreiben**: Ein einziges `asyncio.Lock` serialisiert alle Anhänge
-   an die Runtime-`custom.txt`-Dateien.
-
-Änderungen v2.3.0 (14 Fixes)
-------------------------------
-Fix  #1  _is_mod() prüft Powerlevel nur noch im mod_room_id — DM-Eskalation unmöglich.
-Fix  #2  command_rooms-Konfiguration — Bot ignoriert Befehle in nicht-gelisteten Räumen.
-Fix  #3  _edit_notice() spec-konformes m.new_content-Format + Retry-Mechanismus.
-Fix  #4  !allow/!block räumen pending_reviews auf, inkl. Wildcard-Sweep.
-Fix  #5  on_message überspringt URL-Filter, wenn Nachricht mit '!' beginnt.
-Fix  #6  !allow/!block/!unallow/!unblock/!urlstatus akzeptieren mehrere Domains.
-Fix  #7  Semikolon gilt als Trenner — 1.com;2.com;3.com → 3 Domains erkannt.
-Fix  #8  Konfigurierbares Stummschaltfenster + automatisches Entstummen per asyncio-Task.
-Fix  #9  !pending zeigt menschenlesbare Zeiten ("10 Minuten", "2 Stunden").
-Fix #10  !mute / !unmute-Befehle mit optionalem -t-Parameter.
-Fix #11  !sendpending sendet alle offenen Alarme neu in den Mod-Raum.
-Fix #12  Bearbeitete Nachrichten aktualisieren bestehende Vorschau; Vorschauen als Reply.
-Fix #13  Alle whitelisteten Links in einer Nachricht erhalten eine eigene Vorschau.
-Fix #14  "achso...ne" wird nicht mehr als Domain erkannt (aufeinanderfolgende Punkte).
+5. **Datenbankgestützte Persistenz (Privacy by Design)**: Alle Runtime-Entscheidungen
+   (allow/block/ignore) sowie Moderationsanfragen und Verstoßdaten werden in Maubots
+   nativer Datenbank gespeichert. Matrix-IDs werden ausschließlich als SHA-256-Hash
+   (mit konfiguriertem Salt) gespeichert — niemals im Klartext. Ein DSGVO-Retention-Loop
+   bereinigt Verstoßdaten automatisch nach 24 Stunden.
 
 Abhängigkeiten
 --------------
@@ -57,6 +43,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import datetime
+import hashlib
 import os
 import re
 import time
@@ -89,8 +76,73 @@ from mautrix.types import (
     UserID,
 )
 from mautrix.api import Method as HTTPMethod, Path as APIPath
-from mautrix.util.async_db import UpgradeTable, Scheme
+from mautrix.util.async_db import UpgradeTable
 from mautrix.util.config import BaseProxyConfig, ConfigUpdateHelper
+
+
+# ===========================================================================
+# ABSCHNITT 3b — DATENBANKSCHEMA  (Privacy by Design / DSGVO)
+# ===========================================================================
+#
+# Vier Tabellen ersetzen die dateibasierte Speicherung für Laufzeit-Entscheidungen:
+#
+#   DomainRule    — Whitelist-/Blacklist-/Ignore-Einträge aus Mod-Aktionen (kein roher URL-Pfad)
+#   DomainStats   — Verstoß-Zähler pro sanitisierter Domain  (keine Nutzerdaten)
+#   UserViolation — SHA-256-gehashte User-IDs + UTC-Timestamps  (niemals rohe Matrix-IDs)
+#   PendingReview — offene Moderationsanfragen  (keine Sender-ID, keine vollständige URL)
+#
+# Datenhaltungs-Task: UserViolation-Einträge werden nach 24 Stunden automatisch gelöscht.
+# ===========================================================================
+
+_DB_UPGRADE_TABLE: UpgradeTable = UpgradeTable()
+
+
+@_DB_UPGRADE_TABLE.register(description="Initial privacy-compliant schema (v3.0)")
+async def _db_upgrade_v1(conn) -> None:  # type: ignore[no-untyped-def]
+    # Runtime-Whitelisting/-Blacklisting/-Ignore via Mod-Befehle
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS domain_rule (
+            domain         TEXT    PRIMARY KEY,
+            is_blacklisted BOOLEAN NOT NULL DEFAULT FALSE,
+            ignore_preview BOOLEAN NOT NULL DEFAULT FALSE
+        )
+        """
+    )
+    # Anonymisierte Verstoß-Häufigkeit pro Domain (kein Nutzerbezug)
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS domain_stats (
+            domain          TEXT    PRIMARY KEY,
+            violation_count INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    # Gehashte Nutzer-Violation-Zeitreihe für Sliding-Window-Mute-Logik
+    # HINWEIS: DATETIME ist portabel (SQLite + asyncpg).
+    # Kein DEFAULT — ts wird vom Python-Code immer explizit übergeben.
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_violation (
+            user_hash TEXT     NOT NULL,
+            ts        DATETIME NOT NULL
+        )
+        """
+    )
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS user_violation_ts_idx ON user_violation (ts)"
+    )
+    # Offene Moderationsanfragen — nur Minimal-Metadaten, kein Sender, keine vollständige URL
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS pending_review (
+            alert_event_id    TEXT PRIMARY KEY,
+            room_id           TEXT NOT NULL,
+            original_event_id TEXT NOT NULL,
+            domain            TEXT NOT NULL
+        )
+        """
+    )
 
 
 # ===========================================================================
@@ -194,9 +246,9 @@ _BOT_COMMAND_NAMES: frozenset = frozenset(
         "unmute",
         "liststats",
         "hilfe",
-        "stats",
         "ignore",
         "unignore",
+        "status",
     }
 )
 
@@ -798,37 +850,6 @@ def _strip_matrix_to_deeplinks(text: str) -> str:
 
 
 # ===========================================================================
-# ABSCHNITT 4b — DATENBANK-MIGRATION
-# ===========================================================================
-
-upgrade_table = UpgradeTable()
-
-
-@upgrade_table.register(description="Initial link_log table")
-async def upgrade_v1(conn, scheme: Scheme) -> None:
-    if scheme == Scheme.POSTGRES:
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS link_log (
-                id        BIGSERIAL PRIMARY KEY,
-                sender    TEXT      NOT NULL,
-                url       TEXT      NOT NULL,
-                domain    TEXT      NOT NULL,
-                logged_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-    else:
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS link_log (
-                id        INTEGER   PRIMARY KEY,
-                sender    TEXT      NOT NULL,
-                url       TEXT      NOT NULL,
-                domain    TEXT      NOT NULL,
-                logged_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-
-# ===========================================================================
 # ABSCHNITT 5 — KONFIGURATION
 # ===========================================================================
 
@@ -851,8 +872,7 @@ class Config(BaseProxyConfig):
         helper.copy("mute_window_minutes")  # Fix #8
         helper.copy("mute_duration_minutes")  # Fix #8
         helper.copy("mute_commands_enabled")  # Fix #18
-        helper.copy("cleanup_enabled")
-        helper.copy("cleanup_after_days")
+        helper.copy("secret_salt")  # DSGVO: Salt für SHA-256-Nutzer-Hashing
 
 
 # ===========================================================================
@@ -897,30 +917,24 @@ class URLFilterBot(Plugin):
     ruft start() / stop() rund um den Plugin-Lebenszyklus auf.
 
     Laufzeitzustand (initialisiert in start()):
-      blacklist_set     — Set gesperrter Domains          (ca. 6,5 Mio. Einträge)
-      whitelist_set     — Set erlaubter Domains           (typischerweise klein)
-      pending_reviews   — offene Moderationsanfragen      (Dict)
-      _pending_domains  — O(1)-Set bereits wartender Domains
-                          (verhindert doppelte Mod-Raum-Alarme pro Domain)
-      _seen_events      — LRU-Set kürzlich verarbeiteter Event-IDs
-                          (verhindert Mehrfachverarbeitung bei Matrix-Sync-Replays)
-      _seen_events_q    — Deque-Spiegel von _seen_events für FIFO-Verdrängung
-      _file_lock        — asyncio.Lock für Datei-Schreibzugriffe
-      _loader_pool      — ThreadPoolExecutor für Parser-Threads
-      _warn_cooldowns   — Dict[sender, monotonic-Zeitstempel der letzten Warnung]
-                          Verhindert Notification Flooding: Warnungen werden pro
-                          Nutzer höchstens einmal pro `warn_cooldown` Sekunden gepostet.
-                          Nachrichten werden weiterhin sofort gelöscht.
-      _violation_counts — Dict[sender, List[monotonic-Zeitstempel]]
-                          Zählt Verstöße innerhalb eines 5-Minuten-Fensters.
-                          Auslöser für automatisches Stummschalten bei Überschreitung
-                          von `mute_threshold`.
-      _active_mutes     — (user_id, room_id) → monotonic unmute_at  [Fix #8]
-      _unmute_task      — asyncio.Task für Auto-Entstummen           [Fix #8]
-      _preview_map      — str(original_event_id) → {domain → preview_event_id}  [Fix #12/#13]
-      _cleanup_task     — asyncio.Task für den periodischen Datenbank-Bereinigungsloop.
-                          None wenn cleanup_enabled = false oder DB nicht verfügbar.
-                          Wird in stop() abgebrochen und sauber abgewartet.
+      blacklist_set       — Set gesperrter Domains          (ca. 6,5 Mio. Einträge)
+      whitelist_set       — Set erlaubter Domains           (typischerweise klein)
+      pending_reviews     — offene Moderationsanfragen      (Dict, DB-persistiert)
+      _pending_domains    — O(1)-Set bereits wartender Domains
+                            (verhindert doppelte Mod-Raum-Alarme pro Domain)
+      _seen_events        — LRU-Set kürzlich verarbeiteter Event-IDs
+                            (verhindert Mehrfachverarbeitung bei Matrix-Sync-Replays)
+      _seen_events_q      — Deque-Spiegel von _seen_events für FIFO-Verdrängung
+      _loader_pool        — ThreadPoolExecutor für Parser-Threads
+      _domain_rule_cache  — In-Memory-Cache aller DomainRule-DB-Einträge (O(1)-Lookup)
+      _warn_cooldowns     — Dict[sender, monotonic-Zeitstempel der letzten Warnung]
+                            Verhindert Notification Flooding: Warnungen werden pro
+                            Nutzer höchstens einmal pro `warn_cooldown` Sekunden gepostet.
+                            Nachrichten werden weiterhin sofort gelöscht.
+      _active_mutes       — (user_id, room_id) → monotonic unmute_at  [Fix #8]
+      _unmute_task        — asyncio.Task für Auto-Entstummen           [Fix #8]
+      _retention_task     — asyncio.Task für DSGVO-Datenhaltung (UserViolation 24 h)
+      _preview_map        — str(original_event_id) → {domain → preview_event_id}  [Fix #12/#13]
     """
 
     _SEEN_EVENTS_MAX: int = 1_000
@@ -935,7 +949,8 @@ class URLFilterBot(Plugin):
 
     @classmethod
     def get_db_upgrade_table(cls) -> UpgradeTable:
-        return upgrade_table
+        """Registriert das Datenbankschema bei Maubot (einmalig pro Version ausgeführt)."""
+        return _DB_UPGRADE_TABLE
 
     async def start(self) -> None:
         """
@@ -978,18 +993,20 @@ class URLFilterBot(Plugin):
         self._seen_events: Set[EventID] = set()
         self._seen_events_q: Deque[EventID] = deque()
 
-        # Lock zur Serialisierung von custom.txt-Anhängen
-        self._file_lock: asyncio.Lock = asyncio.Lock()
-
         # Spam-Schutz: letzte Warn-Zeitstempel pro Nutzer (monotonic)
         self._warn_cooldowns: Dict[str, float] = {}
-
-        # Spam-Schutz: Verstoß-Zeitstempel pro Nutzer (monotonic)
-        self._violation_counts: Dict[str, List[float]] = {}
 
         # Fix #8: Aktive Stummschaltungen  { (user_id, room_id) → unmute_at }
         self._active_mutes: Dict[Tuple[str, str], float] = {}
         self._unmute_task: Optional[asyncio.Task] = None
+
+        # DB-gestützter In-Memory-Cache aller DomainRule-Einträge
+        # domain → {"is_blacklisted": bool, "ignore_preview": bool}
+        # Wird beim Start aus der DB geladen für O(1)-Lookups ohne DB-Roundtrip.
+        self._domain_rule_cache: Dict[str, Dict[str, bool]] = {}
+
+        # DSGVO-Datenhaltungs-Task (bereinigt UserViolation-Einträge > 24 h)
+        self._retention_task: Optional[asyncio.Task] = None
 
         # Fix #12/#13: str(original_event_id) → {domain: preview_event_id}
         # Jede Nachricht hat ein eigenes Dict aller ihrer Vorschauen.
@@ -1001,10 +1018,8 @@ class URLFilterBot(Plugin):
         # Wird beim Edit-Pfad genutzt, damit Folge-Vorschauen ebenfalls im Thread landen.
         self._thread_map: Dict[str, str] = {}
 
-        # Datenbank-Bereinigungsaufgabe — None bis nach dem Start initialisiert.
-        # KRITISCH: Muss VOR super().start() deklariert werden, damit kein
-        # AttributeError entsteht, falls stop() vor dem Task-Start aufgerufen wird.
-        self._cleanup_task: Optional[asyncio.Task] = None
+        # Uptime-Tracking — monotonic, unabhängig von Systemuhr-Korrekturen
+        self.start_time: float = time.monotonic()
 
         # ── Maubot-Basisklasse starten (gibt Kontrolle an asyncio ab) ─────────
         await super().start()
@@ -1020,19 +1035,35 @@ class URLFilterBot(Plugin):
 
         await self._reload_lists()
 
-        # ── Datenbank-Bereinigungsloop starten (wenn aktiviert) ───────────────
-        # asyncio.get_event_loop().create_task() ist sicher, weil wir uns hier
-        # innerhalb einer laufenden Coroutine befinden (nach super().start()).
-        # Der Task läuft vollständig nicht-blockierend parallel zum Sync-Loop.
-        if self.config.get("cleanup_enabled", False) and self.database is not None:
-            self._cleanup_task = asyncio.get_event_loop().create_task(
-                self._cleanup_loop(),
-                name="urlfilter_cleanup",
+        # ── DSGVO-Salt-Validierung ────────────────────────────────────────────
+        # KRITISCH: Bevor irgendetwas in die Datenbank geschrieben wird, muss
+        # sichergestellt sein, dass ein individueller secret_salt konfiguriert ist.
+        #
+        # Hintergrund: Wird der Bot mit dem Default-Salt gestartet und später auf
+        # einen echten Salt umgestellt, stimmen alle bisher gespeicherten SHA-256-
+        # Hashes nicht mehr — der Mute-Verlauf (Sliding-Window) wird korrumpiert.
+        # Ein nachträglicher Salt-Wechsel ist daher nicht sicher rückgängig zu machen.
+        #
+        # Deshalb: Hard-Stop beim Start, solange kein gültiger Salt gesetzt ist.
+        _salt_raw: str = self.config.get("secret_salt", "")
+        if not _salt_raw or _salt_raw.startswith("CHANGE_ME"):
+            self.log.critical(
+                "🚨 PLUGIN NICHT GESTARTET: secret_salt ist nicht konfiguriert oder "
+                "enthält noch den Standardwert. Bitte in der Instanzkonfiguration "
+                "einen zufälligen Salt setzen: "
+                "python3 -c \"import secrets; print(secrets.token_hex(32))\""
             )
-            self.log.info(
-                "Datenbank-Bereinigungsloop gestartet (cleanup_after_days=%d).",
-                int(self.config.get("cleanup_after_days", 30)),
+            raise ValueError(
+                "secret_salt ist nicht gesetzt oder enthält noch den Standardwert. "
+                "Plugin-Start abgebrochen. Bitte in der Maubot-Instanzkonfiguration "
+                "einen individuellen secret_salt eintragen."
             )
+
+        # ── Datenbank: DomainRule-Cache + offene Reviews wiederherstellen ─────
+        # Läuft NACH dem Textdatei-Laden, damit DB-Einträge Datei-Einträge
+        # überschreiben können (z.B. manuell via !block gesperrte Domains).
+        await self._load_domain_rules_cache()
+        await self._load_pending_reviews_from_db()
 
         # ── Auto-Entstumm-Loop  [Fix #8] ─────────────────────────────────────
         # Läuft alle 30 Sekunden und hebt abgelaufene Stummschaltungen auf.
@@ -1042,6 +1073,13 @@ class URLFilterBot(Plugin):
             name="urlfilter_unmute",
         )
 
+        # ── DSGVO-Datenhaltungs-Loop ──────────────────────────────────────────
+        # Löscht UserViolation-Einträge die älter als 24 h sind.
+        self._retention_task = asyncio.get_event_loop().create_task(
+            self._retention_loop(),
+            name="urlfilter_retention",
+        )
+
     async def stop(self) -> None:
         """Geordnetes Herunterfahren — gibt den Thread-Pool frei und bricht
         den Bereinigungsloop sauber ab."""
@@ -1049,7 +1087,7 @@ class URLFilterBot(Plugin):
         # cancel() schickt CancelledError an den nächsten await-Punkt im Task.
         # Das kurze `await` danach stellt sicher, dass der Task vollständig
         # beendet wurde, bevor wir den Event-Loop freigeben.
-        for task_attr in ("_cleanup_task", "_unmute_task"):
+        for task_attr in ("_unmute_task", "_retention_task"):
             task = getattr(self, task_attr, None)
             if task is not None and not task.done():
                 task.cancel()
@@ -1772,6 +1810,12 @@ class URLFilterBot(Plugin):
                 f"⚠️ {evt.sender}: Deine Nachricht wurde entfernt, da sie einen gesperrten Link enthielt. "
                 f"Wende dich an einen Moderator, wenn du glaubst, dass dies ein Fehler ist.",
             )
+        # DomainStats: sanitisierte Zählung pro Domain (kein Nutzerbezug)
+        for _d in domains:
+            try:
+                await self._db_increment_domain_stats(_d)
+            except Exception as _exc:
+                self.log.debug("DomainStats-Inkrementierung fehlgeschlagen: %s", _exc)
         await self._handle_violation(evt.sender, evt.room_id)
         return redacted
 
@@ -1798,34 +1842,13 @@ class URLFilterBot(Plugin):
         _fmt: Optional[str] = getattr(evt.content, "formatted_body", None) or None
         for domain in domains:
             await self._submit_for_review(domain, evt)
-            if self.database is not None:
-                url = self._find_url_for_domain(_body, domain, _fmt)
-                await self._log_link(evt.sender, url or f"https://{domain}", domain)
         await self._handle_violation(evt.sender, evt.room_id)
         return redacted
-
-    def _record_violation(self, sender: str) -> bool:
-        """
-        Fix #8: Verwendet jetzt mute_window_minutes aus der Konfiguration
-        statt des fest kodierten 5-Minuten-Fensters.
-        """
-        threshold: int = int(self.config.get("mute_threshold", 5))
-        now = time.monotonic()
-        # Fix #8: konfigurierbares Fenster statt fest kodierter 300 Sekunden
-        window_min = float(self.config.get("mute_window_minutes", 5))
-        window = window_min * 60.0
-
-        timestamps = self._violation_counts.setdefault(sender, [])
-        cutoff = now - window
-        while timestamps and timestamps[0] < cutoff:
-            timestamps.pop(0)
-        timestamps.append(now)
-        return len(timestamps) >= threshold
 
     async def _handle_violation(self, sender: str, room_id: RoomID) -> None:
         if not self.config.get("mute_enabled", False):
             return
-        if self._record_violation(sender):
+        if await self._record_violation(sender):
             muted = await self._mute_user(sender, room_id)
             if muted:
                 dur_min = int(self.config.get("mute_duration_minutes", 60))
@@ -2116,6 +2139,20 @@ class URLFilterBot(Plugin):
         )
         self.pending_reviews[alert_id] = review
         self._pending_domains.add(domain)
+
+        # DB-Persistenz: DSGVO-konform — keine Sender-ID, keine vollständige URL
+        try:
+            await self._db_upsert_pending_review(
+                str(alert_id),
+                str(evt.room_id),
+                str(evt.event_id),
+                domain,
+            )
+        except Exception as exc:
+            self.log.error(
+                "PendingReview-DB-Schreiben fehlgeschlagen für '%s': %s", domain, exc
+            )
+
         review.whitelist_reaction_id = await self._send_reaction(
             mod_room, alert_id, _EMOJI_ALLOW
         )
@@ -2161,22 +2198,12 @@ class URLFilterBot(Plugin):
         self, review: PendingReview, alert_id: EventID, mod_user: UserID
     ) -> None:
         domain = review.domain
-        wl_file = os.path.abspath(
-            os.path.join(self.config["whitelist_dir"], "custom.txt")
-        )
         try:
-            await self._append_to_file(domain, wl_file)
-        except PermissionError:
-            await self._send_notice(
-                self.config["mod_room_id"],
-                f"❌ **Zugriff verweigert:** Kann nicht in `{wl_file}` schreiben.\n"
-                f"```\nchown -R 1337:1337 ./data/whitelists ./data/blacklists\n```",
-            )
-            return
+            await self._db_upsert_domain_rule(domain, is_blacklisted=False, ignore_preview=False)
         except Exception as exc:
             await self._send_notice(
                 self.config["mod_room_id"],
-                f"❌ **Schreibfehler (Whitelist):** `{domain}` — `{type(exc).__name__}: {exc}`",
+                f"❌ **Datenbankfehler (Whitelist):** `{domain}` — `{type(exc).__name__}: {exc}`",
             )
             return
 
@@ -2184,8 +2211,10 @@ class URLFilterBot(Plugin):
         self.blacklist_set.discard(domain)
         self.pending_reviews.pop(alert_id, None)
         self._pending_domains.discard(domain)
-        if self.database is not None:
-            await self._delete_logged_links_for_domain(domain)
+        try:
+            await self._db_delete_pending_review(str(alert_id))
+        except Exception as exc:
+            self.log.debug("PendingReview-DB-Löschen nach Allow fehlgeschlagen: %s", exc)
         await self._edit_notice(
             self.config["mod_room_id"],
             alert_id,
@@ -2202,22 +2231,12 @@ class URLFilterBot(Plugin):
         self, review: PendingReview, alert_id: EventID, mod_user: UserID
     ) -> None:
         domain = review.domain
-        bl_file = os.path.abspath(
-            os.path.join(self.config["blacklist_dir"], "custom.txt")
-        )
         try:
-            await self._append_to_file(domain, bl_file)
-        except PermissionError:
-            await self._send_notice(
-                self.config["mod_room_id"],
-                f"❌ **Zugriff verweigert:** Kann nicht in `{bl_file}` schreiben.\n"
-                f"```\nchown -R 1337:1337 ./data/whitelists ./data/blacklists\n```",
-            )
-            return
+            await self._db_upsert_domain_rule(domain, is_blacklisted=True, ignore_preview=False)
         except Exception as exc:
             await self._send_notice(
                 self.config["mod_room_id"],
-                f"❌ **Schreibfehler (Blacklist):** `{domain}` — `{type(exc).__name__}: {exc}`",
+                f"❌ **Datenbankfehler (Blacklist):** `{domain}` — `{type(exc).__name__}: {exc}`",
             )
             return
 
@@ -2225,6 +2244,10 @@ class URLFilterBot(Plugin):
         self.whitelist_set.discard(domain)
         self.pending_reviews.pop(alert_id, None)
         self._pending_domains.discard(domain)
+        try:
+            await self._db_delete_pending_review(str(alert_id))
+        except Exception as exc:
+            self.log.debug("PendingReview-DB-Löschen nach Block fehlgeschlagen: %s", exc)
         await self._edit_notice(
             self.config["mod_room_id"],
             alert_id,
@@ -2297,9 +2320,6 @@ class URLFilterBot(Plugin):
             )
             return
 
-        wl_file = os.path.abspath(
-            os.path.join(self.config["whitelist_dir"], "custom.txt")
-        )
         results: List[str] = []
 
         for domain in domain_list:
@@ -2315,15 +2335,17 @@ class URLFilterBot(Plugin):
                 results.append(f"ℹ️ `{domain}` ist bereits auf der Whitelist")
                 continue
             try:
-                await self._append_to_file(domain, wl_file)
                 if is_wildcard:
+                    # Wildcards werden nicht in domain_rule gespeichert (kein PK-konformes Format)
+                    # Sie werden nur in den In-Memory-Sets gehalten (aus Textdateien)
                     self.whitelist_wildcards.add(suffix)
                     self.blacklist_wildcards.discard(suffix)
                 else:
+                    await self._db_upsert_domain_rule(
+                        domain, is_blacklisted=False, ignore_preview=False
+                    )
                     self.whitelist_set.add(domain)
                     self.blacklist_set.discard(domain)
-                if self.database is not None:
-                    await self._delete_logged_links_for_domain(domain)
                 results.append(f"✅ `{domain}` zur Whitelist hinzugefügt")
                 self.log.info("'%s' manuell von %s whitelisted.", domain, evt.sender)
 
@@ -2332,10 +2354,8 @@ class URLFilterBot(Plugin):
                     domain, is_whitelist=True, mod_user=evt.sender
                 )
 
-            except PermissionError:
-                results.append(f"❌ `{domain}` — Zugriff verweigert auf `{wl_file}`")
             except Exception as exc:
-                results.append(f"❌ `{domain}` — Fehler: `{type(exc).__name__}: {exc}`")
+                results.append(f"❌ `{domain}` — Datenbankfehler: `{type(exc).__name__}: {exc}`")
 
         await evt.reply("\n".join(results))
 
@@ -2362,9 +2382,6 @@ class URLFilterBot(Plugin):
             )
             return
 
-        bl_file = os.path.abspath(
-            os.path.join(self.config["blacklist_dir"], "custom.txt")
-        )
         results: List[str] = []
 
         for domain in domain_list:
@@ -2380,11 +2397,13 @@ class URLFilterBot(Plugin):
                 results.append(f"ℹ️ `{domain}` ist bereits auf der Blacklist")
                 continue
             try:
-                await self._append_to_file(domain, bl_file)
                 if is_wildcard:
                     self.blacklist_wildcards.add(suffix)
                     self.whitelist_wildcards.discard(suffix)
                 else:
+                    await self._db_upsert_domain_rule(
+                        domain, is_blacklisted=True, ignore_preview=False
+                    )
                     self.blacklist_set.add(domain)
                     self.whitelist_set.discard(domain)
                 results.append(f"🚫 `{domain}` zur Blacklist hinzugefügt")
@@ -2395,10 +2414,8 @@ class URLFilterBot(Plugin):
                     domain, is_whitelist=False, mod_user=evt.sender
                 )
 
-            except PermissionError:
-                results.append(f"❌ `{domain}` — Zugriff verweigert auf `{bl_file}`")
             except Exception as exc:
-                results.append(f"❌ `{domain}` — Fehler: `{type(exc).__name__}: {exc}`")
+                results.append(f"❌ `{domain}` — Datenbankfehler: `{type(exc).__name__}: {exc}`")
 
         await evt.reply("\n".join(results))
 
@@ -2430,6 +2447,11 @@ class URLFilterBot(Plugin):
         for alert_id, review in to_resolve:
             self.pending_reviews.pop(alert_id, None)
             self._pending_domains.discard(review.domain)
+            # DB-Eintrag entfernen
+            try:
+                await self._db_delete_pending_review(str(alert_id))
+            except Exception as exc:
+                self.log.debug("PendingReview-DB-Löschen fehlgeschlagen: %s", exc)
             # Mod-Raum-Alarm aktualisieren
             if mod_room:
                 if is_whitelist:
@@ -2475,9 +2497,6 @@ class URLFilterBot(Plugin):
         if not domain_list:
             await evt.reply("❌ Verwendung: `!unallow <domain>` [domain2 ...]")
             return
-        wl_file = os.path.abspath(
-            os.path.join(self.config["whitelist_dir"], "custom.txt")
-        )
         results: List[str] = []
         for domain in domain_list:
             if not _valid_domain(domain):
@@ -2486,17 +2505,15 @@ class URLFilterBot(Plugin):
             is_wildcard = domain.startswith("*.")
             suffix = domain[2:] if is_wildcard else None
             try:
-                await self._remove_from_file(domain, wl_file)
                 if is_wildcard:
                     self.whitelist_wildcards.discard(suffix)
                 else:
+                    await self._db_delete_domain_rule(domain)
                     self.whitelist_set.discard(domain)
                 results.append(f"✅ `{domain}` aus der Whitelist entfernt")
                 self.log.info("'%s' aus Whitelist entfernt von %s.", domain, evt.sender)
-            except PermissionError:
-                results.append(f"❌ `{domain}` — Zugriff verweigert auf `{wl_file}`")
             except Exception as exc:
-                results.append(f"❌ `{domain}` — Fehler: `{type(exc).__name__}: {exc}`")
+                results.append(f"❌ `{domain}` — Datenbankfehler: `{type(exc).__name__}: {exc}`")
         await evt.reply("\n".join(results))
 
     # ---------------------------------------------------------------------------
@@ -2517,9 +2534,6 @@ class URLFilterBot(Plugin):
         if not domain_list:
             await evt.reply("❌ Verwendung: `!unblock <domain>` [domain2 ...]")
             return
-        bl_file = os.path.abspath(
-            os.path.join(self.config["blacklist_dir"], "custom.txt")
-        )
         results: List[str] = []
         for domain in domain_list:
             if not _valid_domain(domain):
@@ -2528,17 +2542,15 @@ class URLFilterBot(Plugin):
             is_wildcard = domain.startswith("*.")
             suffix = domain[2:] if is_wildcard else None
             try:
-                await self._remove_from_file(domain, bl_file)
                 if is_wildcard:
                     self.blacklist_wildcards.discard(suffix)
                 else:
+                    await self._db_delete_domain_rule(domain)
                     self.blacklist_set.discard(domain)
                 results.append(f"✅ `{domain}` aus der Blacklist entfernt")
                 self.log.info("'%s' aus Blacklist entfernt von %s.", domain, evt.sender)
-            except PermissionError:
-                results.append(f"❌ `{domain}` — Zugriff verweigert auf `{bl_file}`")
             except Exception as exc:
-                results.append(f"❌ `{domain}` — Fehler: `{type(exc).__name__}: {exc}`")
+                results.append(f"❌ `{domain}` — Datenbankfehler: `{type(exc).__name__}: {exc}`")
         await evt.reply("\n".join(results))
 
     # ---------------------------------------------------------------------------
@@ -2688,9 +2700,10 @@ class URLFilterBot(Plugin):
         failed = 0
 
         for old_alert_id, review in old_reviews:
+            sender_display = review.sender if review.sender else "(Unbekannt — Bot neugestartet)"
             alert_text = (
                 f"🔔 **URL-Überprüfung erforderlich** *(erneut gesendet)*\n\n"
-                f"**Absender:** {review.sender}\n"
+                f"**Absender:** {sender_display}\n"
                 f"**Raum:** `{review.original_room_id}`\n"
                 f"**Domain:** `{review.domain}`\n"
                 f"**Eingereicht:** vor {_format_age(int(time.monotonic() - review.submitted_at))}\n\n"
@@ -2706,6 +2719,12 @@ class URLFilterBot(Plugin):
 
             # Alten Eintrag entfernen, neuen eintragen (submitted_at beibehalten)
             self.pending_reviews.pop(old_alert_id, None)
+            # DB-Eintrag mit alter ID entfernen
+            try:
+                await self._db_delete_pending_review(str(old_alert_id))
+            except Exception as exc:
+                self.log.debug("PendingReview-DB-Löschen (sendpending) fehlgeschlagen: %s", exc)
+
             new_review = PendingReview(
                 domain=review.domain,
                 original_event_id=review.original_event_id,
@@ -2714,6 +2733,16 @@ class URLFilterBot(Plugin):
                 submitted_at=review.submitted_at,  # Ursprungszeit behalten
             )
             self.pending_reviews[new_alert_id] = new_review
+            # Neue DB-Persistenz für die neue alert_event_id
+            try:
+                await self._db_upsert_pending_review(
+                    str(new_alert_id),
+                    str(review.original_room_id),
+                    str(review.original_event_id),
+                    review.domain,
+                )
+            except Exception as exc:
+                self.log.debug("PendingReview-DB-Schreiben (sendpending) fehlgeschlagen: %s", exc)
             # Reaktionsknöpfe neu hinzufügen
             new_review.whitelist_reaction_id = await self._send_reaction(
                 mod_room, new_alert_id, _EMOJI_ALLOW
@@ -2857,6 +2886,73 @@ class URLFilterBot(Plugin):
     # !hilfe
     # ---------------------------------------------------------------------------
 
+    # ---------------------------------------------------------------------------
+    # !status  — Bot-Gesundheitscheck
+    # ---------------------------------------------------------------------------
+
+    @command.new("status", help="Bot-Status, Latenz, Datenbankverbindung und Version anzeigen.")
+    async def cmd_botstatus(self, evt: MessageEvent) -> None:
+        if not await self._is_allowed_command_room(evt.room_id):
+            return
+
+        # ── Ping (Nachrichtenlatenz) ───────────────────────────────────────────
+        now_ms = int(time.time() * 1000)
+        ping_ms = max(0, now_ms - evt.timestamp)
+
+        # ── Uptime ────────────────────────────────────────────────────────────
+        uptime_s = int(time.monotonic() - self.start_time)
+        days, rem = divmod(uptime_s, 86400)
+        hours, rem = divmod(rem, 3600)
+        minutes = rem // 60
+        uptime_str = f"{days}d {hours}h {minutes}m"
+
+        # ── Datenbankverbindung ────────────────────────────────────────────────
+        db_status: str
+        db_ping_str: str
+        try:
+            db_t0 = time.perf_counter()
+            await self.database.fetchval("SELECT 1")
+            db_ping_ms = int((time.perf_counter() - db_t0) * 1000)
+            db_status = "OK"
+            db_ping_str = f"{db_ping_ms}ms"
+        except Exception as exc:
+            db_status = f"Error: {type(exc).__name__}"
+            db_ping_str = "N/A"
+
+        # ── Versionen ──────────────────────────────────────────────────────────
+        running_version = str(self.loader.meta.version)
+        github_version: str
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    "https://api.github.com/repos/M2tecDev/morpheus-link-bot/releases/latest",
+                    headers={"Accept": "application/vnd.github+json"},
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        github_version = data.get("tag_name", "N/A")
+                    else:
+                        github_version = f"HTTP {resp.status}"
+        except Exception as exc:
+            github_version = f"Error: {type(exc).__name__}"
+
+        # ── Ausgabe ───────────────────────────────────────────────────────────
+        status_text = (
+            "**Bot Status**\n"
+            f"**PING:** `{ping_ms}ms`\n"
+            f"**UPTIME:** `{uptime_str}`\n"
+            f"**DB Status:** `{db_status}`\n"
+            f"**DB PING:** `{db_ping_str}`\n"
+            f"**Version Running:** `{running_version}`\n"
+            f"**Newest Version (GIT):** `{github_version}`"
+        )
+        await self._send_notice(evt.room_id, status_text, render_markdown=True)
+
+    # ---------------------------------------------------------------------------
+    # !hilfe
+    # ---------------------------------------------------------------------------
+
     @command.new("hilfe", help="Zeigt alle Befehle (nur per Direktnachricht / DM).")
     async def cmd_hilfe(self, evt: MessageEvent) -> None:
         try:
@@ -2902,43 +2998,6 @@ class URLFilterBot(Plugin):
         await self._send_notice(evt.room_id, help_text, render_markdown=True)
 
     # ---------------------------------------------------------------------------
-    # !stats (Admin)
-    # ---------------------------------------------------------------------------
-
-    @command.new("stats", help="[Admin] Zeigt protokollierte Links für einen Nutzer.")
-    @command.argument("user", pass_raw=True, required=True)
-    async def cmd_link_stats(self, evt: MessageEvent, user: str) -> None:
-        if not await self._is_allowed_command_room(evt.room_id):
-            return
-        allowed_list = self.config.get("mod_permissions", {}).get("allowed_users", [])
-        if not isinstance(allowed_list, list):
-            allowed_list = []
-        if str(evt.sender) not in allowed_list:
-            await evt.reply("❌ Du hast keine Berechtigung für diesen Befehl.")
-            return
-        user_id = user.strip()
-        if not user_id or not user_id.startswith("@") or ":" not in user_id[1:]:
-            await evt.reply("❌ Verwendung: `!stats <@nutzer:homeserver>`")
-            return
-        if self.database is None:
-            await evt.reply("❌ Datenbank nicht verfügbar.")
-            return
-        try:
-            count = await self.database.fetchval(
-                "SELECT COUNT(*) FROM link_log WHERE sender = $1",
-                user_id,
-            )
-        except Exception:
-            self.log.exception("Datenbankfehler bei !stats für %s.", user_id)
-            await evt.reply("❌ Datenbankfehler. Siehe Maubot-Logs.")
-            return
-        count = count or 0
-        await evt.reply(
-            f"📊 **Link-Log-Statistik**\nNutzer: `{user_id}`\n"
-            f"Protokollierte (nicht genehmigte) Links: **{count}**",
-        )
-
-    # ---------------------------------------------------------------------------
     # !ignore
     # ---------------------------------------------------------------------------
 
@@ -2959,8 +3018,6 @@ class URLFilterBot(Plugin):
         if not domain_list:
             await evt.reply("❌ Verwendung: `!ignore <domain>` [domain2 ...]")
             return
-        bl_dir = self.config["blacklist_dir"]
-        ignore_file = os.path.abspath(os.path.join(bl_dir, "ignore.txt"))
         results: List[str] = []
         for domain in domain_list:
             if not _valid_domain(domain):
@@ -2976,7 +3033,7 @@ class URLFilterBot(Plugin):
                 and not self._matches_wildcards(domain, self.whitelist_wildcards)
             )
             try:
-                await self._append_to_file(domain, ignore_file)
+                await self._db_upsert_ignore_preview(domain, True)
                 self.ignore_preview_set.add(domain)
                 if not_whitelisted:
                     results.append(
@@ -2991,12 +3048,8 @@ class URLFilterBot(Plugin):
                 self.log.info(
                     "'%s' zur Ignore-Liste hinzugefügt von %s.", domain, evt.sender
                 )
-            except PermissionError:
-                results.append(
-                    f"❌ `{domain}` — Zugriff verweigert auf `{ignore_file}`"
-                )
             except Exception as exc:
-                results.append(f"❌ `{domain}` — Fehler: `{type(exc).__name__}: {exc}`")
+                results.append(f"❌ `{domain}` — Datenbankfehler: `{type(exc).__name__}: {exc}`")
         await evt.reply("\n".join(results))
 
     # ---------------------------------------------------------------------------
@@ -3019,8 +3072,6 @@ class URLFilterBot(Plugin):
         if not domain_list:
             await evt.reply("❌ Verwendung: `!unignore <domain>` [domain2 ...]")
             return
-        bl_dir = self.config["blacklist_dir"]
-        ignore_file = os.path.abspath(os.path.join(bl_dir, "ignore.txt"))
         results: List[str] = []
         for domain in domain_list:
             if not _valid_domain(domain):
@@ -3030,7 +3081,7 @@ class URLFilterBot(Plugin):
                 results.append(f"ℹ️ `{domain}` ist nicht auf der Ignore-Liste")
                 continue
             try:
-                await self._remove_from_file(domain, ignore_file)
+                await self._db_upsert_ignore_preview(domain, False)
                 self.ignore_preview_set.discard(domain)
                 results.append(
                     f"✅ `{domain}` von der Ignore-Liste entfernt (Linkvorschauen wieder aktiv)"
@@ -3038,12 +3089,8 @@ class URLFilterBot(Plugin):
                 self.log.info(
                     "'%s' von Ignore-Liste entfernt von %s.", domain, evt.sender
                 )
-            except PermissionError:
-                results.append(
-                    f"❌ `{domain}` — Zugriff verweigert auf `{ignore_file}`"
-                )
             except Exception as exc:
-                results.append(f"❌ `{domain}` — Fehler: `{type(exc).__name__}: {exc}`")
+                results.append(f"❌ `{domain}` — Datenbankfehler: `{type(exc).__name__}: {exc}`")
         await evt.reply("\n".join(results))
 
     # ===========================================================================
@@ -3303,127 +3350,298 @@ class URLFilterBot(Plugin):
             return None
 
     # ===========================================================================
-    # ABSCHNITT 19 — DATEI-E/A-DIENSTPROGRAMM
+    # ABSCHNITT 19 — DATENBANKOPERATIONEN  (Privacy by Design / DSGVO)
     # ===========================================================================
+    #
+    # Alle Methoden in diesem Abschnitt ersetzen die frühere dateibasierte Persistenz.
+    # Designprinzipien:
+    #   • Keine rohen Matrix-IDs in der DB — immer SHA-256(salt:user_id)
+    #   • Domains vor dem Schreiben sanitisieren (Query-Parameter entfernen)
+    #   • Alle Operationen sind awaitable und blockieren den Event-Loop nicht
 
-    async def _append_to_file(self, domain: str, filepath: str) -> None:
-        abs_filepath = os.path.abspath(filepath)
-        async with self._file_lock:
-            try:
-                parent = os.path.dirname(abs_filepath)
-                if parent:
-                    os.makedirs(parent, exist_ok=True)
-                with open(abs_filepath, "a", encoding="utf-8") as fh:
-                    fh.write(f"\n{domain}\n")
-            except PermissionError:
-                self.log.exception(
-                    "ZUGRIFF VERWEIGERT: '%s' → '%s'. "
-                    "Fix: chown -R 1337:1337 ./data/blacklists ./data/whitelists",
-                    domain,
-                    abs_filepath,
-                )
-                raise
-            except Exception:
-                self.log.exception(
-                    "SCHREIBEN FEHLGESCHLAGEN: '%s' → '%s'.", domain, abs_filepath
-                )
-                raise
-        self.log.debug("'%s' an '%s' angehängt.", domain, abs_filepath)
+    # ── Privacy-Hilfsmethoden ──────────────────────────────────────────────────
 
-    async def _remove_from_file(self, domain: str, filepath: str) -> None:
-        abs_filepath = os.path.abspath(filepath)
-        async with self._file_lock:
-            try:
-                if not os.path.exists(abs_filepath):
-                    return
-                with open(abs_filepath, "r", encoding="utf-8") as fh:
-                    lines = fh.readlines()
-                domain_lower = domain.lower()
-                new_lines: list = []
-                for line in lines:
-                    stripped = line.strip()
-                    if not stripped or stripped.startswith("#"):
-                        new_lines.append(line)
-                        continue
-                    ci = stripped.find(" #")
-                    check = stripped[:ci].rstrip() if ci != -1 else stripped
-                    parts = check.split(None, 2)
-                    if not parts:
-                        new_lines.append(line)
-                        continue
-                    if len(parts) >= 2 and parts[0] in _LOOPBACK:
-                        entry = parts[1].lower()
-                    else:
-                        entry = parts[0].lower()
-                    if entry == domain_lower:
-                        continue
-                    new_lines.append(line)
-                with open(abs_filepath, "w", encoding="utf-8") as fh:
-                    fh.writelines(new_lines)
-            except PermissionError:
-                self.log.exception(
-                    "ZUGRIFF VERWEIGERT: '%s' aus '%s' entfernen.", domain, abs_filepath
-                )
-                raise
-            except Exception:
-                self.log.exception(
-                    "ENTFERNEN FEHLGESCHLAGEN: '%s' aus '%s'.", domain, abs_filepath
-                )
-                raise
-        self.log.debug("'%s' aus '%s' entfernt.", domain, abs_filepath)
+    def _hash_user(self, user_id: str) -> str:
+        """
+        SHA-256(SECRET_SALT + ':' + user_id) → 64-Zeichen-Hex-Digest.
 
-    # ===========================================================================
-    # ABSCHNITT 19b — DATENBANK-HILFSMETHODEN
-    # ===========================================================================
+        DSGVO-Garantie: Niemals rohe Matrix-IDs in der Datenbank speichern.
+        Das Salt verhindert Rainbow-Table-Angriffe auf gehashte IDs.
+        WICHTIG: secret_salt darf nach der Erstkonfiguration nicht geändert werden,
+                 da bestehende Hashes sonst nicht mehr übereinstimmen.
+        """
+        salt: str = self.config.get("secret_salt", "")
+        raw = f"{salt}:{user_id}".encode("utf-8")
+        return hashlib.sha256(raw).hexdigest()
 
-    async def _log_link(self, sender: UserID, url: str, domain: str) -> None:
+    @staticmethod
+    def _sanitize_domain_for_storage(domain: str) -> str:
+        """
+        Entfernt Query-Parameter (alles nach '?') vor der DB-Speicherung.
+        Wendet zusätzlich Kleinschreibung und Strip an.
+
+        Beispiel: 'evil.com?tracking=1' → 'evil.com'
+        """
+        return domain.split("?")[0].lower().strip()
+
+    # ── Cache-Bootstrap beim Start ────────────────────────────────────────────
+
+    async def _load_domain_rules_cache(self) -> None:
+        """
+        Lädt alle DomainRule-Einträge aus der DB in den In-Memory-Cache
+        und aktualisiert die Routing-Sets (blacklist_set, whitelist_set,
+        ignore_preview_set).
+
+        Wird NACH dem Textdatei-Laden aufgerufen, damit DB-Einträge
+        (manuelle Mod-Entscheidungen) Datei-Einträge überschreiben können.
+        """
         try:
-            await self.database.execute(
-                "INSERT INTO link_log (sender, url, domain) VALUES ($1, $2, $3)",
-                str(sender),
-                url,
-                domain,
+            rows = await self.database.fetch(
+                "SELECT domain, is_blacklisted, ignore_preview FROM domain_rule"
             )
-        except Exception:
-            self.log.exception(
-                "Datenbankfehler beim Protokollieren von Link '%s'.", url
-            )
-
-    async def _delete_logged_links_for_domain(self, domain: str) -> None:
-        try:
-            await self.database.execute(
-                "DELETE FROM link_log WHERE domain = $1", domain
-            )
-        except Exception:
-            self.log.exception(
-                "Datenbankfehler beim Löschen von Link-Log für Domain '%s'.", domain
-            )
-
-    async def _cleanup_loop(self) -> None:
-        self.log.debug("Bereinigungsloop gestartet.")
-        while True:
-            await self._run_link_log_cleanup()
-            await asyncio.sleep(24 * 60 * 60)
-
-    async def _run_link_log_cleanup(self) -> None:
-        if self.database is None:
+        except Exception as exc:
+            self.log.error("Fehler beim Laden des DomainRule-Caches: %s", exc)
             return
-        days = int(self.config.get("cleanup_after_days", 30))
-        if days <= 0:
-            return
-        cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=days)
+
+        for row in rows:
+            domain: str = row["domain"]
+            is_bl: bool = bool(row["is_blacklisted"])
+            ignore_pv: bool = bool(row["ignore_preview"])
+
+            self._domain_rule_cache[domain] = {
+                "is_blacklisted": is_bl,
+                "ignore_preview": ignore_pv,
+            }
+            if ignore_pv:
+                self.ignore_preview_set.add(domain)
+            if is_bl:
+                self.blacklist_set.add(domain)
+                self.whitelist_set.discard(domain)
+            else:
+                self.whitelist_set.add(domain)
+                self.blacklist_set.discard(domain)
+
+        self.log.info(
+            "📦 DomainRule-Cache: %d Einträge aus DB geladen.", len(self._domain_rule_cache)
+        )
+
+    async def _load_pending_reviews_from_db(self) -> None:
+        """
+        Stellt offene Moderationsanfragen nach einem Neustart aus der DB wieder her.
+        Sender-ID ist nicht gespeichert (Privacy by Design) → wird als leerer UserID
+        wiederhergestellt. Moderatoren sehen dann '(Unbekannt)' im !pending-Output.
+        """
         try:
-            await self.database.execute(
-                "DELETE FROM link_log WHERE logged_at < $1", cutoff
+            rows = await self.database.fetch(
+                "SELECT alert_event_id, room_id, original_event_id, domain "
+                "FROM pending_review"
             )
+        except Exception as exc:
+            self.log.error("Fehler beim Laden ausstehender Reviews aus DB: %s", exc)
+            return
+
+        restored = 0
+        for row in rows:
+            alert_id = EventID(row["alert_event_id"])
+            review = PendingReview(
+                domain=row["domain"],
+                original_event_id=EventID(row["original_event_id"]),
+                original_room_id=RoomID(row["room_id"]),
+                sender=UserID(""),  # Sender-ID nicht gespeichert — Privacy by Design
+            )
+            self.pending_reviews[alert_id] = review
+            self._pending_domains.add(row["domain"])
+            restored += 1
+
+        if restored:
             self.log.info(
-                "Link-Log-Bereinigung: Einträge älter als %d Tage gelöscht (cutoff: %s UTC).",
-                days,
-                cutoff.strftime("%Y-%m-%d %H:%M"),
+                "🔄 %d ausstehende Überprüfung(en) aus DB wiederhergestellt.", restored
             )
-        except Exception:
-            self.log.exception("Datenbankfehler bei Link-Log-Bereinigung.")
 
+    # ── DomainRule CRUD ────────────────────────────────────────────────────────
+
+    async def _db_upsert_domain_rule(
+        self,
+        domain: str,
+        is_blacklisted: bool,
+        ignore_preview: bool,
+    ) -> None:
+        """
+        Legt einen DomainRule-Eintrag an oder aktualisiert ihn (UPSERT).
+        Aktualisiert gleichzeitig den In-Memory-Cache.
+        """
+        clean = self._sanitize_domain_for_storage(domain)
+        await self.database.execute(
+            """
+            INSERT INTO domain_rule (domain, is_blacklisted, ignore_preview)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (domain) DO UPDATE
+                SET is_blacklisted = EXCLUDED.is_blacklisted,
+                    ignore_preview  = EXCLUDED.ignore_preview
+            """,
+            clean,
+            is_blacklisted,
+            ignore_preview,
+        )
+        self._domain_rule_cache[clean] = {
+            "is_blacklisted": is_blacklisted,
+            "ignore_preview": ignore_preview,
+        }
+        self.log.debug(
+            "DomainRule UPSERT: domain=%s is_bl=%s ignore_pv=%s",
+            clean, is_blacklisted, ignore_preview,
+        )
+
+    async def _db_upsert_ignore_preview(self, domain: str, ignore: bool) -> None:
+        """
+        Setzt nur das ignore_preview-Flag.
+        Behält den is_blacklisted-Wert aus dem Cache bei (kein Überschreiben).
+        """
+        clean = self._sanitize_domain_for_storage(domain)
+        existing = self._domain_rule_cache.get(clean)
+        is_bl = existing["is_blacklisted"] if existing else False
+        await self._db_upsert_domain_rule(clean, is_bl, ignore)
+
+    async def _db_delete_domain_rule(self, domain: str) -> None:
+        """
+        Entfernt einen DomainRule-Eintrag vollständig aus der DB und dem Cache.
+        Kein Fehler wenn der Eintrag nicht existiert.
+        """
+        clean = self._sanitize_domain_for_storage(domain)
+        await self.database.execute(
+            "DELETE FROM domain_rule WHERE domain = $1", clean
+        )
+        self._domain_rule_cache.pop(clean, None)
+        self.log.debug("DomainRule gelöscht: domain=%s", clean)
+
+    # ── PendingReview CRUD ─────────────────────────────────────────────────────
+
+    async def _db_upsert_pending_review(
+        self,
+        alert_event_id: str,
+        room_id: str,
+        original_event_id: str,
+        domain: str,
+    ) -> None:
+        """
+        Speichert eine Moderationsanfrage persistent.
+        DSGVO: Keine Sender-ID, keine vollständige URL — nur Domain und Event-Referenzen.
+        """
+        clean_domain = self._sanitize_domain_for_storage(domain)
+        await self.database.execute(
+            """
+            INSERT INTO pending_review
+                (alert_event_id, room_id, original_event_id, domain)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (alert_event_id) DO UPDATE
+                SET room_id           = EXCLUDED.room_id,
+                    original_event_id = EXCLUDED.original_event_id,
+                    domain            = EXCLUDED.domain
+            """,
+            alert_event_id,
+            room_id,
+            original_event_id,
+            clean_domain,
+        )
+
+    async def _db_delete_pending_review(self, alert_event_id: str) -> None:
+        """Löscht eine erledigte Moderationsanfrage aus der DB."""
+        await self.database.execute(
+            "DELETE FROM pending_review WHERE alert_event_id = $1", alert_event_id
+        )
+
+    # ── DomainStats ────────────────────────────────────────────────────────────
+
+    async def _db_increment_domain_stats(self, domain: str) -> None:
+        """
+        Erhöht den Verstoß-Zähler für eine Domain (UPSERT).
+        Domain wird vor dem Schreiben sanitisiert (keine Query-Parameter).
+        Kein Nutzerbezug — nur Domain-Ebene.
+        """
+        clean = self._sanitize_domain_for_storage(domain)
+        await self.database.execute(
+            """
+            INSERT INTO domain_stats (domain, violation_count)
+            VALUES ($1, 1)
+            ON CONFLICT (domain) DO UPDATE
+                SET violation_count = domain_stats.violation_count + 1
+            """,
+            clean,
+        )
+
+    # ── UserViolation (Sliding Window via DB) ──────────────────────────────────
+
+    async def _record_violation(self, sender: str) -> bool:
+        """
+        DB-gestützte Verstoßverfolgung — ersetzt die frühere in-memory
+        _violation_counts-Deque.
+
+        DSGVO-Garantie: Speichert SHA-256-Hash der Matrix-ID, niemals die
+        rohe MXID. Das secret_salt aus der Konfiguration schützt vor
+        Rainbow-Table-Angriffen.
+
+        Gibt True zurück wenn der Schwellenwert (mute_threshold) im
+        konfigurierten Beobachtungsfenster (mute_window_minutes) erreicht wurde.
+        """
+        threshold: int = int(self.config.get("mute_threshold", 5))
+        window_min: float = float(self.config.get("mute_window_minutes", 5))
+        user_hash = self._hash_user(sender)
+        # UTC-naive datetime — portabel für SQLite (ISO-8601-String) und asyncpg.
+        now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+        cutoff = now - datetime.timedelta(minutes=window_min)
+
+        try:
+            # Verstoß-Eintrag in DB schreiben (gehashte ID + Zeitstempel)
+            await self.database.execute(
+                "INSERT INTO user_violation (user_hash, ts) VALUES ($1, $2)",
+                user_hash,
+                now,
+            )
+            # Verstöße im Beobachtungsfenster zählen
+            count = await self.database.fetchval(
+                "SELECT COUNT(*) FROM user_violation "
+                "WHERE user_hash = $1 AND ts >= $2",
+                user_hash,
+                cutoff,
+            )
+            return int(count or 0) >= threshold
+        except Exception as exc:
+            self.log.error("Fehler beim Schreiben des UserViolation-Eintrags: %s", exc)
+            return False
+
+    # ── DSGVO-Datenhaltungs-Loop ───────────────────────────────────────────────
+
+    async def _retention_loop(self) -> None:
+        """
+        Datenschutz-Task: Löscht UserViolation-Einträge die älter als 24 Stunden sind.
+
+        Läuft einmalig beim Start (sofortige Erstbereinigung nach Neustart)
+        und danach alle 24 Stunden — vollständig nicht-blockierend im asyncio-Loop.
+
+        Rechtsgrundlage: Datensparsamkeit nach Art. 5 Abs. 1 lit. e DSGVO —
+        personenbezogene Daten (auch gehashte) dürfen nicht länger gespeichert
+        werden als für den Zweck erforderlich. 24 Stunden entspricht dem
+        maximalen mute_window_minutes-Kontext.
+        """
+        self.log.debug("🔒 DSGVO-Datenhaltungs-Loop gestartet.")
+        while True:
+            cutoff = (
+                datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+                - datetime.timedelta(hours=24)
+            )
+            try:
+                await self.database.execute(
+                    "DELETE FROM user_violation WHERE ts < $1", cutoff
+                )
+                self.log.debug(
+                    "🗑️  Datenhaltungsbereinigung: UserViolation-Einträge vor %s gelöscht.",
+                    cutoff.isoformat(),
+                )
+            except Exception as exc:
+                self.log.error(
+                    "Fehler beim Bereinigen alter UserViolation-Einträge: %s", exc
+                )
+            await asyncio.sleep(86_400)  # 24 Stunden
 
 # ===========================================================================
 # ABSCHNITT 20 — MODULGLOBALE HILFSFUNKTIONEN
@@ -3444,11 +3662,6 @@ def _list_txt_files(directory: str) -> List[str]:
         if fn.endswith(".txt")
     )
 
-
-def _clean_domain_arg(raw: str) -> str:
-    """Entfernt Leerzeichen; gibt das erste Token in Kleinbuchstaben zurück (Kompatibilität)."""
-    tokens = raw.strip().lower().split()
-    return tokens[0] if tokens else ""
 
 
 def _split_domain_args(raw: str) -> List[str]:

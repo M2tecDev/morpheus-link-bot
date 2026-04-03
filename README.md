@@ -1,4 +1,4 @@
-# URL-Filter-Bot für Matrix — v2.3.1
+# URL-Filter-Bot für Matrix — v2.4.0
 [![Made for Matrix](https://img.shields.io/badge/Made%20for%20Matrix-000000?logo=matrix&logoColor=white)](https://matrix.org/)
 
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
@@ -10,7 +10,7 @@
 ![Stars](https://img.shields.io/github/stars/M2tecDev/morpheus-link-bot?style=social)
 
 
-Ein Maubot-Plugin, das eingehende Nachrichten in Matrix-Räumen auf URLs scannt und diese gegen konfigurierbare Blacklists und Whitelists prüft. Unbekannte Links werden automatisch zur Moderatorenüberprüfung weitergeleitet. Enthält Link-Protokollierung mit Statistikabfragen, automatischen Spam-Schutz mit optionalem Stummschalten und eine umfassende Sicherheitshärtung.
+Ein Maubot-Plugin, das eingehende Nachrichten in Matrix-Räumen auf URLs scannt und diese gegen konfigurierbare Blacklists und Whitelists prüft. Unbekannte Links werden automatisch zur Moderatorenüberprüfung weitergeleitet. Enthält automatischen Spam-Schutz mit optionalem Stummschalten, eine vollständig datenbankgestützte Persistenz und DSGVO-konforme Datenhaltung.
 
 ---
 
@@ -34,25 +34,23 @@ Ein Maubot-Plugin, das eingehende Nachrichten in Matrix-Räumen auf URLs scannt 
 
 **Drei-Wege-Routing** — Jede erkannte Domain landet in einer von drei Kategorien: Whitelist (erlaubt), Blacklist (gesperrt) oder Unbekannt (zur Überprüfung). Die Whitelist hat immer Vorrang, auch gegenüber einem gleichzeitigen Blacklist-Eintrag.
 
-**Moderationsworkflow** — Unbekannte Domains werden automatisch an einen konfigurierten Moderationsraum weitergeleitet. Moderatoren entscheiden dort per Emoji-Reaktion (✅ / ❌) oder Textbefehl. Die Entscheidung wird sofort aktiv und in der jeweiligen `custom.txt` gespeichert.
+**Moderationsworkflow** — Unbekannte Domains werden automatisch an einen konfigurierten Moderationsraum weitergeleitet. Moderatoren entscheiden dort per Emoji-Reaktion (✅ / ❌) oder Textbefehl. Die Entscheidung wird sofort aktiv und in der Datenbank sowie in der jeweiligen `custom.txt` gespeichert.
 
-**Link-Protokollierung & Statistiken** — Alle nicht genehmigten (unbekannten) Links werden in einer plugin-eigenen Datenbank gespeichert. Wird ein Link freigegeben, wird er automatisch aus der Protokolldatenbank entfernt. Der Befehl `!stats` ermöglicht Administratoren die Abfrage der offenen Link-Anzahl pro Nutzer.
+**Datenbankgestützte Persistenz** — Alle Runtime-Moderationsentscheidungen (Whitelist, Blacklist, Ignore-Vorschauen) sowie offene Moderationsanfragen werden in Maubots nativer Datenbank gespeichert. Bot-Neustarts sind dadurch vollständig stateful — kein Datenverlust bei Neustarts.
 
-**Befehlsraum-Einschränkung (neu in v2.3.0)** — Über den neuen Konfigurationsschlüssel `command_rooms` kann festgelegt werden, in welchen Räumen der Bot auf Befehle reagiert. Der Moderationsraum und Direktnachrichten sind immer erlaubt, unabhängig von dieser Liste.
+**DSGVO / Privacy by Design** — Matrix-Nutzer-IDs werden ausschließlich als `SHA-256(secret_salt:user_id)`-Hash gespeichert, niemals im Klartext. Ein Hintergrund-Retention-Loop löscht Verstoßdaten automatisch nach 24 Stunden. Der `secret_salt` ist ein Pflichtfeld in der Konfiguration.
 
-**Automatische Datenbankbereinigung (neu in v2.2.1)** — Ein nicht-blockierender Hintergrund-Task löscht periodisch veraltete Einträge aus der Link-Log-Datenbank. Interval und Aufbewahrungsdauer sind konfigurierbar. Der Task läuft einmal beim Bot-Start und danach alle 24 Stunden, ohne den Matrix-Sync-Loop zu beeinträchtigen.
+**Befehlsraum-Einschränkung** — Über den Konfigurationsschlüssel `command_rooms` kann festgelegt werden, in welchen Räumen der Bot auf Befehle reagiert. Der Moderationsraum und Direktnachrichten sind immer erlaubt, unabhängig von dieser Liste.
 
 **Wildcard-Unterstützung** — Einträge wie `*.boese-seite.com` sperren alle Subdomains auf einmal. Funktioniert in Blacklist und Whitelist gleichermaßen.
 
-**Apex-Domain-Matching (neu in v2.3.1)** — Ist `evil.com` direkt in der Blacklist eingetragen, werden Subdomains wie `sub.evil.com` oder `api.sub.evil.com` automatisch mitgeblockt — ohne gesonderten Wildcard-Eintrag. Gilt spiegelbildlich auch für die Whitelist.
+**Apex-Domain-Matching** — Ist `evil.com` direkt in der Blacklist eingetragen, werden Subdomains wie `sub.evil.com` oder `api.sub.evil.com` automatisch mitgeblockt — ohne gesonderten Wildcard-Eintrag. Gilt spiegelbildlich auch für die Whitelist.
 
-**URL-Shortener-Auflösung (neu in v2.3.1)** — Bekannte Kurzlink-Dienste (bit.ly, t.co, tinyurl.com u.a.) werden via HEAD-Request aufgelöst. Die finale Ziel-Domain wird geprüft statt des Shortener-Hosts selbst.
+**URL-Shortener-Auflösung** — Bekannte Kurzlink-Dienste (bit.ly, t.co, tinyurl.com u.a.) werden via HEAD-Request aufgelöst. Die finale Ziel-Domain wird geprüft statt des Shortener-Hosts selbst.
 
-**Spam-Schutz & Auto-Mute** — Ein konfigurierbarer Warn-Cooldown verhindert Notification Flooding: Nachrichten werden immer sofort gelöscht, aber eine öffentliche Warnmeldung wird pro Nutzer nur einmal innerhalb des Cooldown-Intervalls gepostet. Optional können Nutzer bei Erreichen eines konfigurierbaren Verstoß-Schwellenwerts innerhalb von 5 Minuten automatisch stummgeschaltet (Powerlevel -1) werden.
+**Spam-Schutz & Auto-Mute** — Ein konfigurierbarer Warn-Cooldown verhindert Notification Flooding: Nachrichten werden immer sofort gelöscht, aber eine öffentliche Warnmeldung wird pro Nutzer nur einmal innerhalb des Cooldown-Intervalls gepostet. Optional können Nutzer bei Erreichen eines konfigurierbaren Verstoß-Schwellenwerts innerhalb des Beobachtungsfensters automatisch stummgeschaltet (Powerlevel -1) werden. Verstöße werden datenbankgestützt mit Sliding-Window-Logik gezählt.
 
 **Linkvorschauen** — Für freigegebene URLs kann der Bot optional Open-Graph-Metadaten abrufen und eine kurze Vorschau (Titel + Beschreibung) im Raum posten.
-
-**Persistente Entscheidungen** — Alle Moderationsentscheidungen überstehen Bot-Neustarts, da sie in `blacklists/custom.txt` bzw. `whitelists/custom.txt` geschrieben werden.
 
 **Event-ID-Deduplizierung** — Ein interner LRU-Cache (1.000 Einträge) verhindert Doppelverarbeitung bei Matrix-Sync-Replays nach Bot-Neustarts oder Netzwerkproblemen.
 
@@ -64,9 +62,10 @@ Ein Maubot-Plugin, das eingehende Nachrichten in Matrix-Räumen auf URLs scannt 
 
 | Befehl | Beschreibung |
 |--------|-------------|
-| `!urlstatus <domain>` | Zeigt ob eine Domain whitelisted, blacklisted oder unbekannt ist — inklusive Wildcard-Treffern. |
+| `!urlstatus <domain>` | Zeigt ob eine Domain whitelisted, blacklisted oder unbekannt ist — inklusive Wildcard- und Apex-Treffern. |
 | `!liststats` | Gibt die Anzahl geladener Domains sowie Wildcards und offene Überprüfungen aus. |
 | `!hilfe` | Zeigt die vollständige Befehlsübersicht — nur per Direktnachricht (DM), damit Modinfos in öffentlichen Räumen verborgen bleiben. |
+| `!botstatus` | Zeigt den aktuellen Bot-Status inkl. Datenbankverbindung und Listengröße. |
 
 ### Moderationsbefehle (erfordern Berechtigung)
 
@@ -74,10 +73,10 @@ Ein Nutzer gilt als Moderator, wenn sein Powerlevel im Moderationsraum mindesten
 
 | Befehl | Beschreibung |
 |--------|-------------|
-| `!allow <domain>` | Domain sofort whitelisten. Unterstützt Wildcards: `!allow *.vertrauenswuerdig.de` — löscht automatisch alle zugehörigen Link-Log-Einträge. |
-| `!unallow <domain>` | Domain oder Wildcard-Eintrag aus der Whitelist entfernen (nur aus `custom.txt`). |
+| `!allow <domain>` | Domain sofort whitelisten. Unterstützt Wildcards: `!allow *.vertrauenswuerdig.de` — löst automatisch alle zugehörigen offenen Überprüfungen auf. |
+| `!unallow <domain>` | Domain oder Wildcard-Eintrag aus der Whitelist entfernen (nur aus `custom.txt` und DB). |
 | `!block <domain>` | Domain sofort blacklisten. Unterstützt Wildcards: `!block *.boese-seite.com` |
-| `!unblock <domain>` | Domain oder Wildcard-Eintrag aus der Blacklist entfernen (nur aus `custom.txt`). |
+| `!unblock <domain>` | Domain oder Wildcard-Eintrag aus der Blacklist entfernen (nur aus `custom.txt` und DB). |
 | `!reloadlists` | Alle `.txt`-Dateien neu einlesen — kein Neustart nötig. Nützlich nach manuellen Änderungen. |
 | `!pending` | Zeigt alle Domains, die aktuell auf eine Moderationsentscheidung warten — mit menschenlesbaren Zeitangaben (z.B. „10 Minuten", „2 Stunden"). |
 | `!sendpending` | Sendet alle offenen Überprüfungsalarme erneut in den Mod-Raum. Nützlich nach einem Bot-Neustart oder wenn Alarme verloren gegangen sind. |
@@ -86,31 +85,11 @@ Ein Nutzer gilt als Moderator, wenn sein Powerlevel im Moderationsraum mindesten
 | `!ignore <domain>` | Domain zur Vorschau-Ignore-Liste hinzufügen — Nachrichten mit dieser Domain werden weiterhin gefiltert, aber keine Linkvorschau mehr erzeugt. |
 | `!unignore <domain>` | Domain von der Vorschau-Ignore-Liste entfernen. |
 
-### Admin-Befehle (nur für `allowed_users`)
-
-Der folgende Befehl ist **ausschließlich** für Nutzer verfügbar, die explizit in `mod_permissions.allowed_users` eingetragen sind. Ein ausreichendes Powerlevel im Mod-Raum genügt hier **nicht**.
-
-| Befehl | Beschreibung |
-|--------|-------------|
-| `!stats <@nutzer:homeserver>` | Zeigt die Anzahl der aktuell protokollierten (noch nicht genehmigten) Links für den angegebenen Nutzer. Erwartet eine vollständige Matrix-ID im Format `@nutzer:homeserver`. |
-
-Beispiel: `!stats @alice:matrix.org`
-
-#### Wie `!stats` funktioniert
-
-Der Befehl liest aus der `link_log`-Datenbanktabelle, die der Bot intern pflegt:
-
-- **Eintrag entsteht**, wenn eine Nachricht eine unbekannte Domain enthält und der Nutzer die Nachricht zur Überprüfung eingereicht hat.
-- **Eintrag wird gelöscht**, sobald die Domain per `!allow` oder ✅-Reaktion genehmigt wird — automatisch, ohne manuellen Eingriff.
-- **Eintrag altert heraus**, wenn die automatische Bereinigung aktiv ist (`cleanup_enabled: true`) und der Eintrag älter als `cleanup_after_days` Tage ist.
-
-**Berechtigungsanforderung:** Der aufrufende Nutzer muss in `mod_permissions.allowed_users` (YAML-Array) eingetragen sein. Ein Powerlevel von 50+ im Mod-Raum allein genügt nicht. Die Matrix-ID muss im Format `@localpart:homeserver` angegeben werden — ungültige Formate werden mit einer Fehlermeldung abgelehnt.
-
 ### Emoji-Reaktionen im Moderationsraum
 
 Wenn eine unbekannte Domain erkannt wird, postet der Bot eine Alarmmeldung im Moderationsraum mit zwei Reaktionsknöpfen:
 
-- **✅** — Domain zur Whitelist hinzufügen, Originalnachricht genehmigen und Link-Log-Einträge für diese Domain löschen.
+- **✅** — Domain zur Whitelist hinzufügen und Originalnachricht genehmigen.
 - **❌** — Domain zur Blacklist hinzufügen.
 
 Reaktionen von Nutzern ohne ausreichende Berechtigung werden still ignoriert.
@@ -121,15 +100,15 @@ Reaktionen von Nutzern ohne ausreichende Berechtigung werden still ignoriert.
 
 Der Bot verwendet vier Stufen, die nacheinander auf jede Nachricht angewendet werden:
 
-**Stufe 0 — Matrix-ID-Bereinigung (neu in v2.2):** Matrix-Nutzer-IDs (`@nutzer:homeserver`) und Raum-IDs (`!raum:homeserver`) werden aus dem Nachrichtentext entfernt, bevor die URL-Erkennung greift. Verhindert, dass Homeserver-Namen fälschlicherweise als URLs erkannt werden — z.B. wenn ein Nutzer `!stats @kori:mein-homeserver.net` schreibt.
+**Stufe 0 — Matrix-ID-Bereinigung:** Matrix-Nutzer-IDs (`@nutzer:homeserver`) und Raum-IDs (`!raum:homeserver`) werden aus dem Nachrichtentext entfernt, bevor die URL-Erkennung greift. Verhindert, dass Homeserver-Namen fälschlicherweise als URLs erkannt werden — z.B. wenn ein Nutzer `!stats @kori:mein-homeserver.net` schreibt.
 
 **Stufe 1 — HTML-Links:** Matrix-Clients senden formatierte Nachrichten mit `<a href="...">`. Diese Links werden als erstes und zuverlässigste Quelle ausgewertet.
 
 **Stufe 2 — Klassische URLs:** Explizite URLs mit `http://`, `https://` oder `www.`-Präfix werden per Regex erkannt.
 
-**Stufe 3 — Nackte Domains:** Domains ohne Protokoll wie `example.com` werden erkannt, sofern ihre TLD (z.B. `.com`, `.de`, `.io`) zu einem bekannten Satz von ~230 gültigen Top-Level-Domains gehört. Das verhindert Falschpositive: `hallo.du` wird ignoriert (`.du` ist keine TLD), `banned.com` wird korrekt erkannt. E-Mail-Adressen wie `user@example.com` werden dabei nicht als Domain ausgewertet. Ab v2.3.1 sind bekannte Missbrauchs-gTLDs wie `.zip`, `.mov` und `.phd` ebenfalls enthalten.
+**Stufe 3 — Nackte Domains:** Domains ohne Protokoll wie `example.com` werden erkannt, sofern ihre TLD (z.B. `.com`, `.de`, `.io`) zu einem bekannten Satz von ~230 gültigen Top-Level-Domains gehört. Das verhindert Falschpositive: `hallo.du` wird ignoriert (`.du` ist keine TLD), `banned.com` wird korrekt erkannt. E-Mail-Adressen wie `user@example.com` werden dabei nicht als Domain ausgewertet. Bekannte Missbrauchs-gTLDs wie `.zip`, `.mov` und `.phd` sind ebenfalls enthalten.
 
-**Unicode-Normalisierung (neu in v2.3.1):** Alle extrahierten Domains werden vor dem Listen-Vergleich normalisiert — Vollbreite-Zeichen (`ｇｏｏｇｌｅ.com` → `google.com`) sowie Unicode-Domains werden per IDNA in ihre Punycode-Form umgewandelt, sodass Blacklist-Einträge in beiden Schreibweisen greifen.
+**Unicode-Normalisierung:** Alle extrahierten Domains werden vor dem Listen-Vergleich normalisiert — Vollbreite-Zeichen (`ｇｏｏｇｌｅ.com` → `google.com`) sowie Unicode-Domains werden per IDNA in ihre Punycode-Form umgewandelt, sodass Blacklist-Einträge in beiden Schreibweisen greifen.
 
 ---
 
@@ -147,10 +126,10 @@ Mit dem Präfix `*.` lassen sich ganze Domain-Familien auf einmal erfassen:
 | `sub.banned.com` | `*.banned.com` | ✅ Ja — Wildcard |
 | `api.banned.com` | `*.banned.com` | ✅ Ja — Wildcard |
 | `banned.com` | `*.banned.com` | ❌ Nein — Wildcard deckt nur Subdomains ab |
-| `sub.banned.com` | `banned.com` (exakt) | ✅ Ja — Apex-Match (neu in v2.3.1) |
-| `a.b.banned.com` | `banned.com` (exakt) | ✅ Ja — Apex-Match (neu in v2.3.1) |
+| `sub.banned.com` | `banned.com` (exakt) | ✅ Ja — Apex-Match |
+| `a.b.banned.com` | `banned.com` (exakt) | ✅ Ja — Apex-Match |
 
-Soll auch die Hauptdomain selbst gesperrt werden, müssen `banned.com` und `*.banned.com` als zwei separate Einträge angelegt werden. Ist `banned.com` direkt in der Blacklist (ohne Wildcard), werden alle Subdomains ab v2.3.1 automatisch miterfasst.
+Soll auch die Hauptdomain selbst gesperrt werden, müssen `banned.com` und `*.banned.com` als zwei separate Einträge angelegt werden. Ist `banned.com` direkt in der Blacklist (ohne Wildcard), werden alle Subdomains automatisch miterfasst.
 
 Wildcards können genau wie reguläre Domains mit `!unblock` / `!unallow` wieder entfernt werden.
 
@@ -168,10 +147,16 @@ Diese Optionen werden in `base-config.yaml` definiert und können pro Instanz im
 | `whitelist_dir` | `/data/whitelists/` | Verzeichnis mit den Whitelist-`.txt`-Dateien. |
 | `mod_room_id` | *(Pflichtfeld)* | Matrix-Raum-ID des Moderationsraums (Format: `!xxx:homeserver`). |
 | `mod_permissions.min_power_level` | `50` | Mindest-Powerlevel für Moderationsaktionen. `100` = nur Admin, `0` = jeder. |
-| `mod_permissions.allowed_users` | `[]` | Nutzer-IDs mit fester Moderation- **und** `!stats`-Berechtigung, unabhängig vom Powerlevel. Muss ein YAML-Array sein. Beispiel: `["@alice:matrix.org"]` |
+| `mod_permissions.allowed_users` | `[]` | Nutzer-IDs mit fester Moderationsberechtigung, unabhängig vom Powerlevel. Muss ein YAML-Array sein. Beispiel: `["@alice:matrix.org"]` |
 | `command_rooms` | `[]` | Liste von Raum-IDs oder -Aliasen, in denen der Bot auf Befehle reagiert. Leer = keine Einschränkung. `mod_room_id` und DMs sind immer erlaubt. |
 
 > ⚠️ **Konfigurationshinweis:** `allowed_users` muss als YAML-Array angegeben werden (eckige Klammern). Eine einzelne ID als String (`allowed_users: "@alice:server"`) wird aus Sicherheitsgründen als ungültig behandelt und ignoriert — der Bot gibt eine Warnung ins Log aus.
+
+### Datenschutz / DSGVO
+
+| Parameter | Standard | Beschreibung |
+|-----------|----------|-------------|
+| `secret_salt` | *(Pflichtfeld)* | Zufälliger Geheimschlüssel für SHA-256-Nutzer-Hashing. Matrix-IDs werden **niemals** im Klartext gespeichert. Generierung: `python3 -c "import secrets; print(secrets.token_hex(32))"` — **nach Erstkonfiguration nicht mehr ändern!** |
 
 ### Linkvorschauen
 
@@ -185,20 +170,11 @@ Diese Optionen werden in `base-config.yaml` definiert und können pro Instanz im
 | Parameter | Standard | Beschreibung |
 |-----------|----------|-------------|
 | `warn_cooldown` | `60` | Warn-Cooldown in Sekunden. Nach einer Warnmeldung wartet der Bot diese Zeit, bevor er für denselben Nutzer eine neue Warnung postet. Nachrichten werden weiterhin sofort gelöscht — nur die öffentliche Benachrichtigung wird gedrosselt. |
-| `mute_enabled` | `false` | Automatisches Stummschalten aktivieren. Wenn `true`, wird ein Nutzer auf Powerlevel -1 gesetzt, sobald er `mute_threshold` Verstöße innerhalb des konfigurierten `mute_window_minutes`-Fensters angehäuft hat. Der Bot benötigt ein höheres Powerlevel als der Zielnutzer. |
+| `mute_enabled` | `false` | Automatisches Stummschalten aktivieren. Wenn `true`, wird ein Nutzer auf Powerlevel -1 gesetzt, sobald er `mute_threshold` Verstöße innerhalb des konfigurierten `mute_window_minutes`-Fensters angehäuft hat. Verstöße werden datenbankgestützt und DSGVO-konform erfasst. Der Bot benötigt ein höheres Powerlevel als der Zielnutzer. |
 | `mute_threshold` | `5` | Anzahl der Verstöße innerhalb des Beobachtungsfensters, die eine automatische Stummschaltung auslösen. |
 | `mute_window_minutes` | `5` | Beobachtungsfenster (Minuten), innerhalb dessen Verstöße eines Nutzers gezählt werden. |
 | `mute_duration_minutes` | `60` | Dauer der automatischen Stummschaltung (Minuten). `0` = unbegrenzt. Ein Hintergrund-Task hebt die Stummschaltung nach Ablauf automatisch auf. |
 | `mute_commands_enabled` | `true` | Manuelle `!mute`- und `!unmute`-Befehle aktivieren. Auf `false` setzen, wenn mehrere Moderations-Bots gleichzeitig im Raum aktiv sind. Betrifft **nicht** das automatische Stummschalten. |
-
-### Datenbank-Bereinigung (Link-Log)
-
-| Parameter | Standard | Beschreibung |
-|-----------|----------|-------------|
-| `cleanup_enabled` | `true` | Automatische Bereinigung des Link-Logs aktivieren. Wenn `true`, läuft beim Start und danach alle 24 Stunden ein nicht-blockierender Hintergrund-Task, der alte Einträge löscht. |
-| `cleanup_after_days` | `30` | Alter in Tagen, nach dem ein Link-Log-Eintrag gelöscht wird. Muss eine positive ganze Zahl sein. Empfohlen: 30–90. |
-
-> **Hinweis:** Die Bereinigung läuft vollständig nicht-blockierend im asyncio-Event-Loop und beeinflusst die Nachrichtenverarbeitung nicht. Der Cut-off-Zeitpunkt wird in Python berechnet und als parametrisierter Bindungsparameter übergeben — kein SQL-String-Zusammenbau, kompatibel mit PostgreSQL und SQLite.
 
 ### Leistungsoptimierung
 
@@ -276,9 +252,10 @@ Im Maubot-Dashboard mindestens folgende Werte setzen:
 blacklist_dir: /data/blacklists/
 whitelist_dir: /data/whitelists/
 mod_room_id: "!DEIN_MOD_RAUM_ID:homeserver.example"
+secret_salt: "dein-zufaelliger-salt-hier"  # python3 -c "import secrets; print(secrets.token_hex(32))"
 ```
 
-Admins für `!stats`-Befehl und direkte Moderationsrechte konfigurieren:
+Moderatoren konfigurieren:
 
 ```yaml
 mod_permissions:
@@ -318,9 +295,9 @@ chown -R 1337:1337 ./data/blacklists ./data/whitelists
 
 **Keine .txt-Dateien beim Start gefunden** — Verzeichnis und Dateien anlegen (Schritt 3), Berechtigungen setzen (Schritt 5).
 
-**`!stats`-Befehl meldet keine Berechtigung** — Sicherstellen, dass die eigene Matrix-ID als Array-Eintrag in `mod_permissions.allowed_users` steht (z.B. `["@alice:matrix.org"]`). Ein einzelner String-Wert wird aus Sicherheitsgründen abgelehnt.
+**`!botstatus` meldet DB-Fehler** — Sicherstellen, dass `database: true` und `database_type: asyncpg` in `maubot.yaml` gesetzt sind und die Maubot-Instanz korrekt gestartet ist.
 
-**Doppelte Alarme im Mod-Raum** — Seit v2.1.0 durch Event-ID-Deduplizierung behoben. Sicherstellen, dass die neuste Version installiert ist.
+**Warnung „secret_salt ist nicht gesetzt"** — Den `secret_salt` in der Instanzkonfiguration auf einen sicheren Zufallswert setzen (siehe Schritt 6). Ohne gültigen Salt werden keine Verstöße in die Datenbank geschrieben.
 
 ---
 

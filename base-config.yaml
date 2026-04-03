@@ -1,5 +1,5 @@
 # =============================================================================
-# base-config.yaml — Standardkonfiguration (v2.3.1)
+# base-config.yaml — Standardkonfiguration (v2.4.0)
 # =============================================================================
 #
 # Diese Standardwerte können nach dem Erstellen einer Instanz im Maubot-Dashboard
@@ -40,7 +40,7 @@ whitelist_dir: /data/whitelists/
 mod_room_id: "ROOM_ID"
 
 # -----------------------------------------------------------------------------
-# BEFEHLSRÄUME  [Fix #2]
+# BEFEHLSRÄUME
 # -----------------------------------------------------------------------------
 # Liste von Raum-IDs oder Raumaliasen, in denen der Bot auf Befehle reagiert.
 # Leer lassen [] = keine Einschränkung (alle Räume).
@@ -117,19 +117,18 @@ mute_enabled: false
 # Stummschaltung auslösen.
 mute_threshold: 5
 
-# Beobachtungsfenster für Verstöße (Minuten).  [Fix #8]
-# Innerhalb dieses Zeitraums werden Verstöße eines Nutzers gezählt. Liegt der
-# Zähler am Ende des Fensters unter mute_threshold, wird er zurückgesetzt.
+# Beobachtungsfenster für Verstöße (Minuten).
+# Innerhalb dieses Zeitraums werden Verstöße eines Nutzers gezählt.
 # Standard: 5 Minuten.
 mute_window_minutes: 5
 
-# Dauer der automatischen Stummschaltung (Minuten). 0 = unbegrenzt.  [Fix #8]
-# Ein Hintergrund-Task (_auto_unmute_loop) hebt die Stummschaltung automatisch
-# nach Ablauf dieser Zeit auf, indem er das Powerlevel des Nutzers zurücksetzt.
+# Dauer der automatischen Stummschaltung (Minuten). 0 = unbegrenzt.
+# Ein Hintergrund-Task hebt die Stummschaltung automatisch nach Ablauf
+# dieser Zeit auf, indem er das Powerlevel des Nutzers zurücksetzt.
 # Standard: 60 Minuten.
 mute_duration_minutes: 60
 
-# Manuelle !mute- und !unmute-Befehle aktivieren (true/false).  [Fix #18]
+# Manuelle !mute- und !unmute-Befehle aktivieren (true/false).
 # Auf false setzen, wenn mehrere Moderations-Bots gleichzeitig in einem Raum
 # aktiv sind — verhindert, dass alle Bots auf denselben !mute-Befehl reagieren.
 # Hinweis: Betrifft NUR die manuellen Befehle !mute / !unmute, NICHT das
@@ -138,17 +137,17 @@ mute_commands_enabled: true
 
 
 # -----------------------------------------------------------------------------
-# DATENBANK-BEREINIGUNG (Link-Log)
+# DATENSCHUTZ / DSGVO (Privacy by Design)
 # -----------------------------------------------------------------------------
 
-# Automatische Bereinigung des Link-Logs aktivieren (true/false).
-# Wenn true, löscht ein Hintergrund-Task periodisch alte Einträge aus der
-# link_log-Tabelle, die älter als `cleanup_after_days` Tage sind.
-# Die Bereinigung läuft einmal beim Start und danach alle 24 Stunden —
-# vollständig nicht-blockierend im asyncio-Event-Loop.
-cleanup_enabled: true
-
-# Alter (in Tagen), nach dem ein Link-Log-Eintrag automatisch gelöscht wird.
-# Gilt nur wenn cleanup_enabled = true.
-# Empfohlen: 30–90 Tage. Muss eine positive ganze Zahl sein.
-cleanup_after_days: 30
+# PFLICHTFELD: Zufälliger Geheimschlüssel für SHA-256-Nutzer-Hashing.
+# Matrix-IDs werden NIEMALS im Klartext gespeichert — nur als SHA-256-Hash mit diesem Salt.
+#
+# ⛔ ACHTUNG: Der Bot verweigert den Start solange dieser Wert nicht geändert wurde!
+#            Ein Start mit dem Standardwert würde die Datenbank korrumpieren —
+#            ein späterer Salt-Wechsel macht bestehende Hashes ungültig (Mute-Verlauf verloren).
+#
+# WICHTIG: Diesen Wert nach der Erstkonfiguration NICHT mehr ändern.
+#
+# Generierung: python3 -c "import secrets; print(secrets.token_hex(32))"
+secret_salt: "CHANGE_ME_use_python3_secrets_token_hex_32"
