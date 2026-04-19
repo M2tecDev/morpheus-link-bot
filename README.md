@@ -1,4 +1,4 @@
-# URL-Filter-Bot für Matrix — v2.4.0
+# URL-Filter-Bot für Matrix — v2.5.0
 [![Made for Matrix](https://img.shields.io/badge/Made%20for%20Matrix-000000?logo=matrix&logoColor=white)](https://matrix.org/)
 
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
@@ -11,6 +11,8 @@
 
 
 Ein Maubot-Plugin, das eingehende Nachrichten in Matrix-Räumen auf URLs scannt und diese gegen konfigurierbare Blacklists und Whitelists prüft. Unbekannte Links werden automatisch zur Moderatorenüberprüfung weitergeleitet. Enthält automatischen Spam-Schutz mit optionalem Stummschalten, eine vollständig datenbankgestützte Persistenz und DSGVO-konforme Datenhaltung.
+
+> **Neu in v2.5.0:** Kein Netzwerkzugriff nach Redaktion gesperrter Nachrichten · `!hilfe` ist in Gruppenräumen vollständig stumm · `!urlstatus` akzeptiert jetzt vollständige URLs mit Protokoll und Pfad.
 
 ---
 
@@ -46,7 +48,7 @@ Ein Maubot-Plugin, das eingehende Nachrichten in Matrix-Räumen auf URLs scannt 
 
 **Apex-Domain-Matching** — Ist `evil.com` direkt in der Blacklist eingetragen, werden Subdomains wie `sub.evil.com` oder `api.sub.evil.com` automatisch mitgeblockt — ohne gesonderten Wildcard-Eintrag. Gilt spiegelbildlich auch für die Whitelist.
 
-**URL-Shortener-Auflösung** — Bekannte Kurzlink-Dienste (bit.ly, t.co, tinyurl.com u.a.) werden via HEAD-Request aufgelöst. Die finale Ziel-Domain wird geprüft statt des Shortener-Hosts selbst.
+**URL-Shortener-Auflösung** — Bekannte Kurzlink-Dienste (bit.ly, t.co, tinyurl.com u.a.) werden via HEAD-Request aufgelöst. Die finale Ziel-Domain wird geprüft statt des Shortener-Hosts selbst. Ist der Shortener-Host selbst bereits gesperrt, entfällt der Netzwerkzugriff vollständig.
 
 **Spam-Schutz & Auto-Mute** — Ein konfigurierbarer Warn-Cooldown verhindert Notification Flooding: Nachrichten werden immer sofort gelöscht, aber eine öffentliche Warnmeldung wird pro Nutzer nur einmal innerhalb des Cooldown-Intervalls gepostet. Optional können Nutzer bei Erreichen eines konfigurierbaren Verstoß-Schwellenwerts innerhalb des Beobachtungsfensters automatisch stummgeschaltet (Powerlevel -1) werden. Verstöße werden datenbankgestützt mit Sliding-Window-Logik gezählt.
 
@@ -62,9 +64,9 @@ Ein Maubot-Plugin, das eingehende Nachrichten in Matrix-Räumen auf URLs scannt 
 
 | Befehl | Beschreibung |
 |--------|-------------|
-| `!urlstatus <domain>` | Zeigt ob eine Domain whitelisted, blacklisted oder unbekannt ist — inklusive Wildcard- und Apex-Treffern. |
+| `!urlstatus <domain>` | Zeigt ob eine Domain whitelisted, blacklisted oder unbekannt ist — inklusive Wildcard- und Apex-Treffern. Akzeptiert auch vollständige URLs: `!urlstatus https://example.com/` wird automatisch auf `example.com` normalisiert. |
 | `!liststats` | Gibt die Anzahl geladener Domains sowie Wildcards und offene Überprüfungen aus. |
-| `!hilfe` | Zeigt die vollständige Befehlsübersicht — nur per Direktnachricht (DM), damit Modinfos in öffentlichen Räumen verborgen bleiben. |
+| `!hilfe` | Zeigt die vollständige Befehlsübersicht — **nur per Direktnachricht (DM)**. In Gruppenräumen reagiert der Bot vollständig lautlos auf diesen Befehl. |
 | `!botstatus` | Zeigt den aktuellen Bot-Status inkl. Datenbankverbindung und Listengröße. |
 
 ### Moderationsbefehle (erfordern Berechtigung)

@@ -3,6 +3,16 @@
 Alle wichtigen Änderungen am **morpheus-link-bot** werden hier dokumentiert.
 Das Format orientiert sich an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/) und [Semantic Versioning](https://semver.org/lang/de/).
 
+## [2.5.0] - 2026-04-19
+
+**Bugfixes & Verbesserungen**
+
+- **Kein Netzwerkzugriff nach Redaktion (Fix #19)** — Wenn eine Nachricht eine gesperrte Domain enthält, bricht der Bot die weitere Verarbeitung sofort nach der Redaktion ab (`return`). Linkvorschauen und alle sonstigen nachgelagerten Operationen werden nicht mehr ausgeführt. Zusätzlich werden bekannte URL-Shortener, die selbst auf der Blacklist stehen, vor dem Auflösen geprüft — ein unnötiger HEAD-Request an gesperrte Domains entfällt dadurch.
+- **`!hilfe` ist in Gruppenräumen vollständig stumm (Fix #20)** — Bisher antwortete der Bot in öffentlichen Räumen mit einer Hinweismeldung (`„Nur per DM verfügbar"`). Ab v2.5.0 reagiert er in Nicht-DM-Räumen gar nicht mehr auf den Befehl — kein Reply, kein Hinweis. Das verhindert, dass Moderationsinfos versehentlich in überwachten Räumen sichtbar werden.
+- **URL-Normalisierung für `!urlstatus` (Fix #21)** — `!urlstatus https://facebook.com/` lieferte bisher `unbekannt`, obwohl `facebook.com` whitelisted ist. Protokollpräfixe (`http://`, `https://`) und Pfadanteile werden jetzt vor dem Lookup automatisch abgeschnitten. `https://www.facebook.com/`, `www.facebook.com` und `facebook.com` werden einheitlich behandelt.
+
+---
+
 ## [2.4.0] - 2026-04-03
 
 **Datenbankarchitektur — komplett neu (Privacy by Design / DSGVO)**

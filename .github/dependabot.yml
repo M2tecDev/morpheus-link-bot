@@ -1,0 +1,14 @@
+version: 2
+updates:
+  - package-ecosystem: "pip" # Für deine requirements.txt
+    directory: "/"
+    schedule:
+      interval: "weekly" # Einmal die Woche reicht völlig
+    open-pull-requests-limit: 5 # Damit du nicht überflutet wirst
+    labels:
+      - "dependencies"
+
+  - package-ecosystem: "github-actions" # Hält auch deine ruff-actions aktuell
+    directory: "/"
+    schedule:
+      interval: "weekly"

@@ -1,5 +1,5 @@
 """
-URL-Filter-Bot — Hochleistungsedition  (v2.4.0)
+URL-Filter-Bot — Hochleistungsedition  (v2.5.0)
 ============================================
 
 Designziele
@@ -201,9 +201,9 @@ async def _db_upgrade_v1(conn) -> None:  # type: ignore[no-untyped-def]
 
 _URL_RE: re.Pattern = re.compile(
     r"(?:https?://|www\.)"
-    r"[a-zA-Z0-9\-._~:@!$&'()*+,=/?#%\[\]]+"
+    r"[a-zA-Z0-9\-._~:@!$&'()*+,=/?#%\[\]\u00C0-\uFFFF]+"
     r"(?<![.,;:!?\])])",
-    re.ASCII | re.IGNORECASE,
+    re.IGNORECASE,
 )
 
 # Hostfile-IP-Präfixe, die beim Parsen verworfen werden
@@ -993,6 +993,15 @@ class URLFilterBot(Plugin):
         self._seen_events: Set[EventID] = set()
         self._seen_events_q: Deque[EventID] = deque()
 
+        # ── Sekundärer Content-Dedup-Cache (Fix: 4x-Notifications) ───────────
+        # Manche Matrix-Clients schicken bei Netzwerkproblemen dasselbe Event
+        # mehrfach mit UNTERSCHIEDLICHEN event_ids (Client-Retry → neuer txnId).
+        # Der primäre _seen_events-Dedup greift nur bei identischer event_id.
+        # Dieser sekundäre Cache verhindert, dass dieselbe Nachricht desselben
+        # Absenders innerhalb von 5 Sekunden mehrfach verarbeitet wird.
+        # Key: "sender_id|body_hash"  Value: monotonic-Zeitstempel
+        self._content_dedup: Dict[str, float] = {}
+
         # Spam-Schutz: letzte Warn-Zeitstempel pro Nutzer (monotonic)
         self._warn_cooldowns: Dict[str, float] = {}
 
@@ -1342,6 +1351,39 @@ class URLFilterBot(Plugin):
                 new_wl.update(result.domains)
                 new_wl_wc.update(result.wildcards)
 
+        # Fix: DB-Overrides in die neuen temporären Sets laden, BEVOR der atomare Swap
+        # ausgeführt wird. Ohne diesen Schritt entsteht ein Zwischenzustand:
+        #   1. _reload_lists() tauscht die Sets (nur Datei-Einträge)
+        #   2. _load_domain_rules_cache() lädt DB-Einträge nach (späterer await-Punkt)
+        # → In diesem Fenster klassifiziert on_message() DB-geblockte Domains als "unknown"
+        #   (3x🔍 + 1x⚠️-Muster). Durch Vorladen in new_bl/new_wl ist der Swap atomar
+        #   und bringt sofort den vollständigen Stand (Dateien + DB) in Kraft.
+        try:
+            _db_rows = await self.database.fetch(
+                "SELECT domain, is_blacklisted, ignore_preview FROM domain_rule"
+            )
+            for _row in _db_rows:
+                _dom: str = _row["domain"]
+                _is_bl: bool = bool(_row["is_blacklisted"])
+                _ign_pv: bool = bool(_row["ignore_preview"])
+                if _ign_pv:
+                    # ignore_preview_set wird separat gesetzt — hier vormerken
+                    self.ignore_preview_set.add(_dom)
+                if _is_bl:
+                    new_bl.add(_dom)
+                    new_wl.discard(_dom)
+                else:
+                    new_wl.add(_dom)
+                    new_bl.discard(_dom)
+            self.log.info(
+                "📦 DB-Overrides in Reload integriert: %d Einträge.", len(_db_rows)
+            )
+        except Exception as _exc:
+            self.log.error(
+                "DB-Lade-Fehler beim Listen-Reload: %s — DB-Einträge werden übersprungen, "
+                "nur Datei-Einträge aktiv.", _exc
+            )
+
         # Atomarer Referenz-Tausch — alle vier Sets gleichzeitig
         # (GIL garantiert Atomarität jedes einzelnen STORE_ATTR-Bytecodes)
         self.blacklist_set = new_bl
@@ -1573,6 +1615,23 @@ class URLFilterBot(Plugin):
             getattr(evt.content, "formatted_body", None) or None
         )
 
+        # ── Sekundärer Content-Dedup (Fix: 4x-Notifications) ─────────────────
+        # Verhindert mehrfache Verarbeitung wenn ein Matrix-Client dasselbe Event
+        # mit unterschiedlicher event_id neu sendet (Client-Retry nach Timeout).
+        # Fenster: 5 Sekunden — kurz genug um echte Duplikate zu fangen,
+        # lang genug um alle Retry-Wellen abzudecken.
+        _body_stripped = body.strip()
+        _dedup_key = f"{evt.sender}\x00{hash(_body_stripped)}"
+        _now_dedup = time.monotonic()
+        _last_content_seen = self._content_dedup.get(_dedup_key, 0.0)
+        if _now_dedup - _last_content_seen < 5.0:
+            return
+        self._content_dedup[_dedup_key] = _now_dedup
+        # Cache auf 1000 Einträge begrenzen (FIFO: älteste löschen)
+        if len(self._content_dedup) > 1000:
+            _oldest_key = next(iter(self._content_dedup))
+            del self._content_dedup[_oldest_key]
+
         # ── Fix #5 (präzisiert): Nur echte Bot-Befehle überspringen den URL-Filter ──
         # Prüfung: beginnt die Nachricht mit "!" UND ist das erste Token danach
         # ein bekannter Befehlsname aus _BOT_COMMAND_NAMES?
@@ -1670,6 +1729,12 @@ class URLFilterBot(Plugin):
         # Fix #18: Bekannte URL-Shortener auflösen — finale Ziel-Domain prüfen
         for s_domain in list(domains):
             if s_domain in _URL_SHORTENERS:
+                if (
+                    s_domain in self.blacklist_set
+                    or self._matches_wildcards(s_domain, self.blacklist_wildcards)
+                    or self._matches_apex(s_domain, self.blacklist_set)
+                ):
+                    continue
                 s_url = self._find_url_for_domain(body, s_domain, formatted_body)
                 if s_url:
                     final = await self._resolve_shortener_domain(s_url)
@@ -1685,17 +1750,21 @@ class URLFilterBot(Plugin):
         whitelisted: List[str] = []
 
         for domain in domains:
-            if (
-                domain in self.whitelist_set
-                or self._matches_wildcards(domain, self.whitelist_wildcards)
-                or self._matches_apex(domain, self.whitelist_set)
-            ):
+            # Fix #18: Priorität Exakt > Wildcard > Apex — jede Ebene wird für
+            # Whitelist UND Blacklist geprüft, bevor zur nächsten Ebene gewechselt wird.
+            # Verhindert, dass ein Apex-WL-Eintrag (example.com) einen exakten
+            # BL-Eintrag (sub.example.com) überschreibt und umgekehrt.
+            if domain in self.whitelist_set:
                 whitelisted.append(domain)
-            elif (
-                domain in self.blacklist_set
-                or self._matches_wildcards(domain, self.blacklist_wildcards)
-                or self._matches_apex(domain, self.blacklist_set)
-            ):
+            elif domain in self.blacklist_set:
+                blacklisted.append(domain)
+            elif self._matches_wildcards(domain, self.whitelist_wildcards):
+                whitelisted.append(domain)
+            elif self._matches_wildcards(domain, self.blacklist_wildcards):
+                blacklisted.append(domain)
+            elif self._matches_apex(domain, self.whitelist_set):
+                whitelisted.append(domain)
+            elif self._matches_apex(domain, self.blacklist_set):
                 blacklisted.append(domain)
             else:
                 unknown.append(domain)
@@ -1703,7 +1772,8 @@ class URLFilterBot(Plugin):
         message_redacted = False
 
         if blacklisted:
-            message_redacted = await self._handle_blacklisted(blacklisted, evt)
+            await self._handle_blacklisted(blacklisted, evt)
+            return
         elif unknown:
             message_redacted = await self._handle_unknown(unknown, evt)
 
@@ -2198,19 +2268,34 @@ class URLFilterBot(Plugin):
         self, review: PendingReview, alert_id: EventID, mod_user: UserID
     ) -> None:
         domain = review.domain
+
+        # Fix: In-Memory-Sets VOR dem DB-Await aktualisieren.
+        # Reason: await self._db_upsert_domain_rule() gibt den Event-Loop frei.
+        # Zwischen diesem yield und der Rückkehr kann on_message() laufen und die
+        # Domain als "unknown" klassifizieren → Nachricht wird trotz Freigabe gelöscht.
+        # Durch das sofortige whitelist_set.add() ist die Domain für alle concurrent
+        # on_message()-Coroutinen ab jetzt als "whitelisted" sichtbar.
+        self.whitelist_set.add(domain)
+        self.blacklist_set.discard(domain)
+
         try:
             await self._db_upsert_domain_rule(
                 domain, is_blacklisted=False, ignore_preview=False
             )
         except Exception as exc:
+            # Rollback bei DB-Fehler (Whitelist-Eintrag bleibt für diese Session gültig,
+            # wird aber bei Neustart nicht wiederhergestellt — Mod soll erneut erlauben).
+            self.log.warning(
+                "DB-Upsert für Whitelist fehlgeschlagen ('%s'): %s — In-Memory-Eintrag bleibt.",
+                domain,
+                exc,
+            )
             await self._send_notice(
                 self.config["mod_room_id"],
-                f"❌ **Datenbankfehler (Whitelist):** `{domain}` — `{type(exc).__name__}: {exc}`",
+                f"⚠️ **Datenbankfehler (Whitelist):** `{domain}` — `{type(exc).__name__}: {exc}`\n"
+                f"Domain ist für diese Session whitelisted, aber wird nach Neustart nicht gespeichert.",
             )
-            return
-
-        self.whitelist_set.add(domain)
-        self.blacklist_set.discard(domain)
+            # Kein return — Genehmigung gilt trotzdem für laufende Session
         self.pending_reviews.pop(alert_id, None)
         self._pending_domains.discard(domain)
         try:
@@ -2349,11 +2434,13 @@ class URLFilterBot(Plugin):
                     self.whitelist_wildcards.add(suffix)
                     self.blacklist_wildcards.discard(suffix)
                 else:
+                    # Fix: In-Memory-Update VOR dem DB-await (verhindert Race-Condition
+                    # bei der on_message() zwischen yield-Punkt und whitelist_set.add läuft)
+                    self.whitelist_set.add(domain)
+                    self.blacklist_set.discard(domain)
                     await self._db_upsert_domain_rule(
                         domain, is_blacklisted=False, ignore_preview=False
                     )
-                    self.whitelist_set.add(domain)
-                    self.blacklist_set.discard(domain)
                 results.append(f"✅ `{domain}` zur Whitelist hinzugefügt")
                 self.log.info("'%s' manuell von %s whitelisted.", domain, evt.sender)
 
@@ -2581,7 +2668,10 @@ class URLFilterBot(Plugin):
     async def cmd_status(self, evt: MessageEvent, domains_raw: str) -> None:
         if not await self._is_allowed_command_room(evt.room_id):
             return
-        domain_list = _split_domain_args(domains_raw)
+        domain_list = [
+            d.split("://", 1)[-1].split("/")[0]
+            for d in _split_domain_args(domains_raw)
+        ]
         if not domain_list:
             await evt.reply("❌ Verwendung: `!urlstatus <domain>` [domain2 ...]")
             return
@@ -2645,6 +2735,13 @@ class URLFilterBot(Plugin):
         old_wl_wc = len(self.whitelist_wildcards)
         await evt.reply("🔄 Listen werden neu geladen – dauert ca. 30 Sek. ...")
         await self._reload_lists()
+        # Fix Bugs 1/2/3: Re-apply runtime DB overrides (approved/blocked domains)
+        # after reloading files. Without this call, _reload_lists() silently erases
+        # every domain that was approved or blocked at runtime (stored in DB), causing:
+        #   - Bug 1: Duplicate "unknown link" notifications (domain vanishes from whitelist_set)
+        #   - Bug 2: Spurious 🔍 line appearing next to ⚠️ (domain vanishes from blacklist_set)
+        #   - Bug 3: Bot re-deletes messages for previously-approved URLs
+        await self._load_domain_rules_cache()
         await self._send_notice(
             evt.room_id,
             f"🏁 Neuladen abgeschlossen.\n"
@@ -2991,7 +3088,7 @@ class URLFilterBot(Plugin):
             return
 
         help_text = (
-            "🤖 **URL-Filter-Bot — Befehlsübersicht (v2.3.0)**\n\n"
+            "🤖 **URL-Filter-Bot — Befehlsübersicht (v2.5.0)**\n\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             "🔓 **Öffentliche Befehle**\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -3151,7 +3248,10 @@ class URLFilterBot(Plugin):
             allowed_list = []
 
         # Fix #1: allowed_users ZUERST prüfen — kein Raumcheck nötig
-        if str(user_id) in allowed_list:
+        # Fix Bug 4: Vergleich case-insensitiv, damit "@Alice:Matrix.org" und
+        # "@alice:matrix.org" als identisch gelten (Matrix-IDs sind case-insensitive).
+        uid_lower = str(user_id).lower()
+        if any(str(u).lower() == uid_lower for u in allowed_list):
             return True
 
         # Fix #1: Powerlevel NUR im mod_room prüfen — niemals im Befehlsraum/DM
