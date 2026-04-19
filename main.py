@@ -1381,7 +1381,8 @@ class URLFilterBot(Plugin):
         except Exception as _exc:
             self.log.error(
                 "DB-Lade-Fehler beim Listen-Reload: %s — DB-Einträge werden übersprungen, "
-                "nur Datei-Einträge aktiv.", _exc
+                "nur Datei-Einträge aktiv.",
+                _exc,
             )
 
         # Atomarer Referenz-Tausch — alle vier Sets gleichzeitig
@@ -2669,8 +2670,7 @@ class URLFilterBot(Plugin):
         if not await self._is_allowed_command_room(evt.room_id):
             return
         domain_list = [
-            d.split("://", 1)[-1].split("/")[0]
-            for d in _split_domain_args(domains_raw)
+            d.split("://", 1)[-1].split("/")[0] for d in _split_domain_args(domains_raw)
         ]
         if not domain_list:
             await evt.reply("❌ Verwendung: `!urlstatus <domain>` [domain2 ...]")
