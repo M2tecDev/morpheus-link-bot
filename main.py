@@ -76,7 +76,7 @@ from mautrix.types import (
     UserID,
 )
 from mautrix.api import Method as HTTPMethod, Path as APIPath
-from mautrix.util.async_db import UpgradeTable
+from mautrix.util.async_db import Database, UpgradeTable
 from mautrix.util.config import BaseProxyConfig, ConfigUpdateHelper
 
 
@@ -97,7 +97,7 @@ from mautrix.util.config import BaseProxyConfig, ConfigUpdateHelper
 _DB_UPGRADE_TABLE: UpgradeTable = UpgradeTable()
 
 
-@_DB_UPGRADE_TABLE.register(description="Initial privacy-compliant schema (v3.0)")
+@_DB_UPGRADE_TABLE.register(description="Initial privacy-compliant schema (v3.0)")  # type: ignore[arg-type, call-arg]
 async def _db_upgrade_v1(conn) -> None:  # type: ignore[no-untyped-def]
     # Runtime-Whitelisting/-Blacklisting/-Ignore via Mod-Befehle
     await conn.execute(
@@ -939,6 +939,10 @@ class URLFilterBot(Plugin):
 
     _SEEN_EVENTS_MAX: int = 1_000
 
+    # Override base-class optionals — always set before any handler runs
+    config: Config
+    database: Database
+
     # ------------------------------------------------------------------
     # Maubot-Lebenszyklus
     # ------------------------------------------------------------------
@@ -1586,7 +1590,7 @@ class URLFilterBot(Plugin):
     # ABSCHNITT 10 — HAUPT-NACHRICHTENHANDLER
     # ===========================================================================
 
-    @event.on(EventType.ROOM_MESSAGE)
+    @event.on(EventType.ROOM_MESSAGE)  # type: ignore[arg-type]
     async def on_message(self, evt: MessageEvent) -> None:
         """
         Einstiegspunkt für jede Raumnachricht.
@@ -1948,7 +1952,9 @@ class URLFilterBot(Plugin):
             users[user_id] = -1
             pl_content["users"] = users
             await self.client.send_state_event(
-                room_id, EventType.ROOM_POWER_LEVELS, pl_content
+                room_id,
+                EventType.ROOM_POWER_LEVELS,
+                pl_content,  # type: ignore[arg-type]
             )
             self.log.info(
                 "Nutzer %s in Raum %s stummgeschaltet (PL -1).", user_id, room_id
@@ -1972,7 +1978,7 @@ class URLFilterBot(Plugin):
         self._active_mutes.pop((str(user_id), str(room_id)), None)
         try:
             pl_content = await self.client.get_state_event(
-                room_id, EventType.ROOM_POWER_LEVELS
+                RoomID(room_id), EventType.ROOM_POWER_LEVELS
             )
             users: dict = pl_content.get("users", {})
             if users.get(user_id) not in (-1, None):
@@ -1981,7 +1987,9 @@ class URLFilterBot(Plugin):
             users[user_id] = 0
             pl_content["users"] = users
             await self.client.send_state_event(
-                room_id, EventType.ROOM_POWER_LEVELS, pl_content
+                RoomID(room_id),
+                EventType.ROOM_POWER_LEVELS,
+                pl_content,  # type: ignore[arg-type]
             )
             self.log.info("Nutzer %s in Raum %s entstummt (PL 0).", user_id, room_id)
             return True
@@ -2009,7 +2017,7 @@ class URLFilterBot(Plugin):
                 success = await self._do_unmute_user(user_id, room_id)
                 if success:
                     await self._send_notice(
-                        room_id,
+                        RoomID(room_id),
                         f"🔊 {user_id} wurde automatisch entstummt.",
                     )
 
@@ -2175,7 +2183,7 @@ class URLFilterBot(Plugin):
     # ===========================================================================
 
     async def _submit_for_review(self, domain: str, evt: MessageEvent) -> None:
-        mod_room: str = self.config.get("mod_room_id", "")
+        mod_room = RoomID(self.config.get("mod_room_id", ""))
         if not mod_room:
             self.log.warning(
                 "mod_room_id nicht konfiguriert — '%s' kann nicht weitergeleitet werden.",
@@ -2238,7 +2246,7 @@ class URLFilterBot(Plugin):
     # ABSCHNITT 13 — REAKTIONS-EVENTHANDLER
     # ===========================================================================
 
-    @event.on(EventType.REACTION)
+    @event.on(EventType.REACTION)  # type: ignore[arg-type]
     async def on_reaction(self, evt: MessageEvent) -> None:
         if evt.sender == self.client.mxid:
             return
@@ -2251,6 +2259,9 @@ class URLFilterBot(Plugin):
             return
         target_id = getattr(relates_to, "event_id", None)
         emoji_key = getattr(relates_to, "key", None)
+        if target_id is None:
+            return
+        target_id = EventID(target_id)
         review = self.pending_reviews.get(target_id)
         if not review:
             return
@@ -2375,7 +2386,7 @@ class URLFilterBot(Plugin):
         command_rooms = self.config.get("command_rooms", [])
         if not command_rooms:
             return True
-        mod_room = str(self.config.get("mod_room_id", ""))
+        mod_room = RoomID(self.config.get("mod_room_id", ""))
         if str(room_id) == mod_room:
             return True
         allowed = [str(r) for r in command_rooms]
@@ -2430,6 +2441,7 @@ class URLFilterBot(Plugin):
                 continue
             try:
                 if is_wildcard:
+                    assert suffix is not None
                     # Wildcards werden nicht in domain_rule gespeichert (kein PK-konformes Format)
                     # Sie werden nur in den In-Memory-Sets gehalten (aus Textdateien)
                     self.whitelist_wildcards.add(suffix)
@@ -2496,6 +2508,7 @@ class URLFilterBot(Plugin):
                 continue
             try:
                 if is_wildcard:
+                    assert suffix is not None
                     self.blacklist_wildcards.add(suffix)
                     self.whitelist_wildcards.discard(suffix)
                 else:
@@ -2531,12 +2544,13 @@ class URLFilterBot(Plugin):
         """
         is_wildcard = domain.startswith("*.")
         suffix = domain[2:] if is_wildcard else None
-        mod_room = str(self.config.get("mod_room_id", ""))
+        mod_room = RoomID(self.config.get("mod_room_id", ""))
 
         # Snapshot der aktuellen Reviews (wir mutieren das Dict während der Iteration)
         to_resolve: List[Tuple[EventID, PendingReview]] = []
         for alert_id, review in list(self.pending_reviews.items()):
             if is_wildcard:
+                assert suffix is not None
                 # Wildcard *.example.com trifft sub.example.com, api.example.com usw.
                 if review.domain.endswith("." + suffix):
                     to_resolve.append((alert_id, review))
@@ -2803,7 +2817,7 @@ class URLFilterBot(Plugin):
             await evt.reply("✅ Keine ausstehenden Überprüfungen.")
             return
 
-        mod_room = str(self.config.get("mod_room_id", ""))
+        mod_room = RoomID(self.config.get("mod_room_id", ""))
         if not mod_room:
             await evt.reply("❌ mod_room_id ist nicht konfiguriert.")
             return
@@ -2915,7 +2929,7 @@ class URLFilterBot(Plugin):
             duration_minutes = int(self.config.get("mute_duration_minutes", 60))
 
         # Stummschalten im Raum wo der Befehl eingegeben wurde (oder Mod-Raum)
-        target_room = str(evt.room_id)
+        target_room = evt.room_id
         success = await self._mute_user(user_id, target_room, duration_minutes)
         if success:
             dur_text = (
@@ -2969,7 +2983,7 @@ class URLFilterBot(Plugin):
             await evt.reply("❌ Ungültige Nutzer-ID. Erwartet: `@nutzer:homeserver`")
             return
 
-        target_room = str(evt.room_id)
+        target_room = evt.room_id
         success = await self._do_unmute_user(user_id, target_room)
         if success:
             await evt.reply(f"🔊 `{user_id}` wurde entstummt.")
@@ -3238,7 +3252,7 @@ class URLFilterBot(Plugin):
         mod_cfg = self.config.get("mod_permissions", {})
         allowed_list = mod_cfg.get("allowed_users", [])
         min_level = int(mod_cfg.get("min_power_level", 50))
-        mod_room = str(self.config.get("mod_room_id", ""))
+        mod_room = RoomID(self.config.get("mod_room_id", ""))
 
         if not isinstance(allowed_list, list):
             self.log.warning(
@@ -3262,12 +3276,12 @@ class URLFilterBot(Plugin):
 
     async def _get_power_level(self, room_id: RoomID, user_id: UserID) -> int:
         try:
-            levels: PowerLevelStateEventContent = await self.client.get_state_event(
+            levels: PowerLevelStateEventContent = await self.client.get_state_event(  # type: ignore[assignment]
                 room_id, EventType.ROOM_POWER_LEVELS
             )
             user_level = levels.users.get(user_id, None)
             if user_level is None:
-                user_level = levels.users.get(str(user_id), None)
+                user_level = levels.users.get(str(user_id), None)  # type: ignore[call-overload]
             if user_level is None:
                 default = levels.users_default
                 user_level = int(default) if default is not None else 0
@@ -3463,7 +3477,7 @@ class URLFilterBot(Plugin):
             return await self.client.send_message_event(
                 room_id,
                 EventType.REACTION,
-                {
+                {  # type: ignore[arg-type]
                     "m.relates_to": {
                         "rel_type": "m.annotation",
                         "event_id": str(target_id),
