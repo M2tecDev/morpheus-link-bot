@@ -207,7 +207,7 @@ _URL_RE: re.Pattern = re.compile(
 )
 
 # Hostfile-IP-Präfixe, die beim Parsen verworfen werden
-_LOOPBACK: frozenset = frozenset({"0.0.0.0", "127.0.0.1"})
+_LOOPBACK: frozenset = frozenset({"0.0.0.0", "127.0.0.1"})  # nosec B104
 
 # Gültige Hostfile-Token, die KEINE echten externen Domains sind
 _SKIP_DOMAINS: frozenset = frozenset(
@@ -215,7 +215,7 @@ _SKIP_DOMAINS: frozenset = frozenset(
         "localhost",
         "broadcasthost",
         "local",
-        "0.0.0.0",
+        "0.0.0.0",  # nosec B104
         "127.0.0.1",
         "255.255.255.255",
         "ip6-localhost",
