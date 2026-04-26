@@ -12,7 +12,7 @@
 #
 # Hinweis: aiohttp wird von Maubot mitgeliefert → kein separater Eintrag nötig.
 
-maubot >= 0.4.0
+maubot >= 0.6.0
 mautrix >= 0.21.0
 
 # =============================================================================
