@@ -1,5 +1,5 @@
 """
-URL-Filter-Bot — Hochleistungsedition  (v2.5.0)
+URL-Filter-Bot — Hochleistungsedition  (v2.6.0)
 ============================================
 
 Designziele
@@ -50,7 +50,7 @@ import time
 import unicodedata
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Deque, Dict, Generator, List, Optional, Set, Tuple
+from typing import Any, Deque, Dict, Generator, List, Optional, Set, Tuple
 from urllib.parse import unquote, urlparse
 
 # ===========================================================================
@@ -872,6 +872,7 @@ class Config(BaseProxyConfig):
         helper.copy("mute_window_minutes")  # Fix #8
         helper.copy("mute_duration_minutes")  # Fix #8
         helper.copy("mute_commands_enabled")  # Fix #18
+        helper.copy("global_mute")
         helper.copy("secret_salt")  # DSGVO: Salt für SHA-256-Nutzer-Hashing
 
 
@@ -931,7 +932,7 @@ class URLFilterBot(Plugin):
                             Verhindert Notification Flooding: Warnungen werden pro
                             Nutzer höchstens einmal pro `warn_cooldown` Sekunden gepostet.
                             Nachrichten werden weiterhin sofort gelöscht.
-      _active_mutes       — (user_id, room_id) → monotonic unmute_at  [Fix #8]
+      _active_mutes       — user_id → [{"room_id": ..., "unmute_at": monotonic}]
       _unmute_task        — asyncio.Task für Auto-Entstummen           [Fix #8]
       _retention_task     — asyncio.Task für DSGVO-Datenhaltung (UserViolation 24 h)
       _preview_map        — str(original_event_id) → {domain → preview_event_id}  [Fix #12/#13]
@@ -1009,8 +1010,8 @@ class URLFilterBot(Plugin):
         # Spam-Schutz: letzte Warn-Zeitstempel pro Nutzer (monotonic)
         self._warn_cooldowns: Dict[str, float] = {}
 
-        # Fix #8: Aktive Stummschaltungen  { (user_id, room_id) → unmute_at }
-        self._active_mutes: Dict[Tuple[str, str], float] = {}
+        # Aktive Stummschaltungen { user_id → [{"room_id": ..., "unmute_at": monotonic}] }
+        self._active_mutes: Dict[str, List[Dict[str, Any]]] = {}
         self._unmute_task: Optional[asyncio.Task] = None
 
         # DB-gestützter In-Memory-Cache aller DomainRule-Einträge
@@ -1020,6 +1021,10 @@ class URLFilterBot(Plugin):
 
         # DSGVO-Datenhaltungs-Task (bereinigt UserViolation-Einträge > 24 h)
         self._retention_task: Optional[asyncio.Task] = None
+
+        # Redact-Queue: verhindert Race Conditions bei schnellem URL-Spam
+        self._redact_queue: asyncio.Queue = asyncio.Queue()
+        self._redact_worker_task: Optional[asyncio.Task] = None
 
         # Fix #12/#13: str(original_event_id) → {domain: preview_event_id}
         # Jede Nachricht hat ein eigenes Dict aller ihrer Vorschauen.
@@ -1093,6 +1098,14 @@ class URLFilterBot(Plugin):
             name="urlfilter_retention",
         )
 
+        # ── Redact-Worker ─────────────────────────────────────────────────────
+        # Verarbeitet Lösch-Aufträge sequenziell, um Race Conditions bei
+        # schnellem URL-Spam und parallelen HTTP-Requests zu vermeiden.
+        self._redact_worker_task = asyncio.get_event_loop().create_task(
+            self._redact_worker(),
+            name="urlfilter_redact_worker",
+        )
+
     async def stop(self) -> None:
         """Geordnetes Herunterfahren — gibt den Thread-Pool frei und bricht
         den Bereinigungsloop sauber ab."""
@@ -1100,7 +1113,7 @@ class URLFilterBot(Plugin):
         # cancel() schickt CancelledError an den nächsten await-Punkt im Task.
         # Das kurze `await` danach stellt sicher, dass der Task vollständig
         # beendet wurde, bevor wir den Event-Loop freigeben.
-        for task_attr in ("_unmute_task", "_retention_task"):
+        for task_attr in ("_unmute_task", "_retention_task", "_redact_worker_task"):
             task = getattr(self, task_attr, None)
             if task is not None and not task.done():
                 task.cancel()
@@ -1924,24 +1937,26 @@ class URLFilterBot(Plugin):
         if not self.config.get("mute_enabled", False):
             return
         if await self._record_violation(sender):
-            muted = await self._mute_user(sender, room_id)
-            if muted:
-                dur_min = int(self.config.get("mute_duration_minutes", 60))
+            dur_min = int(self.config.get("mute_duration_minutes", 60))
+            muted_rooms = await self._mute_user_global(sender, room_id, dur_min)
+            if muted_rooms > 0:
                 dur_text = _format_age(dur_min * 60) if dur_min > 0 else "unbegrenzt"
-                await self._send_notice(
-                    room_id,
-                    f"🔇 {sender} wurde wegen wiederholter Regelverstöße für {dur_text} stummgeschaltet.",
-                )
+                if muted_rooms > 1:
+                    msg = (
+                        f"🔇 {sender} wurde wegen wiederholter Regelverstöße für "
+                        f"{dur_text} in {muted_rooms} Räumen stummgeschaltet."
+                    )
+                else:
+                    msg = (
+                        f"🔇 {sender} wurde wegen wiederholter Regelverstöße für "
+                        f"{dur_text} stummgeschaltet."
+                    )
+                await self._send_notice(room_id, msg)
 
     async def _mute_user(
         self, user_id: str, room_id: RoomID, duration_minutes: Optional[int] = None
     ) -> bool:
-        """
-        Fix #8: Setzt Powerlevel auf -1 und registriert den Zeitstempel für Auto-Entstummen.
-        duration_minutes=0 bedeutet unbegrenzt. None → aus Konfiguration lesen.
-        """
-        if duration_minutes is None:
-            duration_minutes = int(self.config.get("mute_duration_minutes", 60))
+        """Setzt Powerlevel auf -1 (pure API-Wrapper). Zeiterfassung erfolgt in _mute_user_global."""
         try:
             pl_content = await self.client.get_state_event(
                 room_id, EventType.ROOM_POWER_LEVELS
@@ -1959,10 +1974,6 @@ class URLFilterBot(Plugin):
             self.log.info(
                 "Nutzer %s in Raum %s stummgeschaltet (PL -1).", user_id, room_id
             )
-            # Fix #8: Zeitstempel für Auto-Entstummen speichern
-            if duration_minutes and duration_minutes > 0:
-                unmute_at = time.monotonic() + duration_minutes * 60.0
-                self._active_mutes[(str(user_id), str(room_id))] = unmute_at
             return True
         except Exception:
             self.log.exception(
@@ -1971,11 +1982,7 @@ class URLFilterBot(Plugin):
             return False
 
     async def _do_unmute_user(self, user_id: str, room_id: str) -> bool:
-        """
-        Fix #8: Hebt die Stummschaltung auf (setzt PL von -1 zurück auf 0).
-        Entfernt den Eintrag aus _active_mutes. Gibt True bei Erfolg zurück.
-        """
-        self._active_mutes.pop((str(user_id), str(room_id)), None)
+        """Hebt die Stummschaltung auf (setzt PL von -1 zurück auf 0). Pure API-Wrapper."""
         try:
             pl_content = await self.client.get_state_event(
                 RoomID(room_id), EventType.ROOM_POWER_LEVELS
@@ -1999,6 +2006,89 @@ class URLFilterBot(Plugin):
             )
             return False
 
+    async def _get_mute_target_rooms(self, target_user: str) -> List[str]:
+        """Gibt alle Räume zurück, in denen der Bot ein höheres PL als target_user hat."""
+        try:
+            joined = await self.client.get_joined_rooms()
+        except Exception:
+            self.log.exception("Beitretene Räume konnten nicht abgerufen werden.")
+            return []
+
+        bot_id = str(self.client.mxid)
+
+        async def _check(rid: str) -> Optional[str]:
+            try:
+                pl = await self.client.get_state_event(
+                    RoomID(rid), EventType.ROOM_POWER_LEVELS
+                )
+                users: dict = pl.get("users", {})
+                default_pl: int = pl.get("users_default", 0)
+                bot_pl: int = users.get(bot_id, default_pl)
+                target_pl: int = users.get(target_user, default_pl)
+                if bot_pl > 0 and bot_pl > target_pl:
+                    return rid
+            except Exception:
+                self.log.debug("Power-Level-Prüfung für Raum %s fehlgeschlagen.", rid)
+            return None
+
+        results: List[Optional[str]] = list(
+            await asyncio.gather(*(_check(str(rid)) for rid in joined))
+        )
+        return [r for r in results if r is not None]
+
+    async def _mute_user_global(
+        self, user_id: str, room_id: RoomID, duration_minutes: int
+    ) -> int:
+        """
+        Stummt user_id in allen relevanten Räumen (global_mute=true) oder nur
+        in room_id (global_mute=false). Gibt die Anzahl der stummgeschalteten Räume zurück.
+        """
+        if self.config.get("global_mute", True):
+            target_rooms = await self._get_mute_target_rooms(user_id)
+            if not target_rooms:
+                target_rooms = [str(room_id)]
+        else:
+            target_rooms = [str(room_id)]
+
+        unmute_at = (
+            time.monotonic() + duration_minutes * 60.0 if duration_minutes > 0 else 0.0
+        )
+        muted_count = 0
+        room_entries: List[Dict[str, Any]] = []
+
+        for rid in target_rooms:
+            success = await self._mute_user(user_id, RoomID(rid))
+            if success:
+                muted_count += 1
+                if duration_minutes > 0:
+                    room_entries.append({"room_id": rid, "unmute_at": unmute_at})
+
+        if room_entries:
+            self._active_mutes[str(user_id)] = room_entries
+
+        return muted_count
+
+    async def _unmute_user_global(
+        self, user_id: str, fallback_room: Optional[str] = None
+    ) -> int:
+        """
+        Hebt Stummschaltung in allen registrierten Räumen auf.
+        Falls keine Einträge vorhanden, wird fallback_room versucht.
+        Gibt die Anzahl der entstummten Räume zurück.
+        """
+        entries = self._active_mutes.pop(str(user_id), None)
+        if entries:
+            unmuted_count = 0
+            for entry in entries:
+                success = await self._do_unmute_user(user_id, entry["room_id"])
+                if success:
+                    unmuted_count += 1
+            return unmuted_count
+        if fallback_room:
+            success = await self._do_unmute_user(user_id, fallback_room)
+            return 1 if success else 0
+        return 0
+
     async def _auto_unmute_loop(self) -> None:
         """
         Fix #8: Hintergrund-Task der alle 30 Sekunden abgelaufene Stummschaltungen aufhebt.
@@ -2008,18 +2098,27 @@ class URLFilterBot(Plugin):
         while True:
             await asyncio.sleep(30)
             now = time.monotonic()
-            expired = [
-                (uid, rid)
-                for (uid, rid), unmute_at in list(self._active_mutes.items())
-                if unmute_at <= now
-            ]
-            for user_id, room_id in expired:
-                success = await self._do_unmute_user(user_id, room_id)
-                if success:
-                    await self._send_notice(
-                        RoomID(room_id),
-                        f"🔊 {user_id} wurde automatisch entstummt.",
-                    )
+            for user_id, entries in list(self._active_mutes.items()):
+                expired = [
+                    e for e in entries if e["unmute_at"] > 0 and e["unmute_at"] <= now
+                ]
+                for entry in expired:
+                    room_id = entry["room_id"]
+                    success = await self._do_unmute_user(user_id, room_id)
+                    if success:
+                        await self._send_notice(
+                            RoomID(room_id),
+                            f"🔊 {user_id} wurde automatisch entstummt.",
+                        )
+                remaining = [
+                    e
+                    for e in entries
+                    if not (e["unmute_at"] > 0 and e["unmute_at"] <= now)
+                ]
+                if remaining:
+                    self._active_mutes[user_id] = remaining
+                else:
+                    self._active_mutes.pop(user_id, None)
 
     async def _post_link_preview(
         self,
@@ -2928,20 +3027,25 @@ class URLFilterBot(Plugin):
         if duration_minutes is None:
             duration_minutes = int(self.config.get("mute_duration_minutes", 60))
 
-        # Stummschalten im Raum wo der Befehl eingegeben wurde (oder Mod-Raum)
+        # Stummschalten (global oder nur im aktuellen Raum je nach Konfiguration)
         target_room = evt.room_id
-        success = await self._mute_user(user_id, target_room, duration_minutes)
-        if success:
+        muted_rooms = await self._mute_user_global(
+            user_id, target_room, duration_minutes
+        )
+        if muted_rooms > 0:
             dur_text = (
                 _format_age(duration_minutes * 60)
                 if duration_minutes > 0
                 else "unbegrenzt"
             )
-            await evt.reply(f"🔇 `{user_id}` wurde für {dur_text} stummgeschaltet.")
+            rooms_text = f" in {muted_rooms} Räumen" if muted_rooms > 1 else ""
+            await evt.reply(
+                f"🔇 `{user_id}` wurde für {dur_text}{rooms_text} stummgeschaltet."
+            )
             self.log.info(
-                "Manuelles Mute: %s in %s für %s min von %s.",
+                "Manuelles Mute: %s in %d Räumen für %s min von %s.",
                 user_id,
-                target_room,
+                muted_rooms,
                 duration_minutes,
                 evt.sender,
             )
@@ -2984,11 +3088,15 @@ class URLFilterBot(Plugin):
             return
 
         target_room = evt.room_id
-        success = await self._do_unmute_user(user_id, target_room)
-        if success:
-            await evt.reply(f"🔊 `{user_id}` wurde entstummt.")
+        unmuted_rooms = await self._unmute_user_global(user_id, str(target_room))
+        if unmuted_rooms > 0:
+            rooms_text = f" in {unmuted_rooms} Räumen" if unmuted_rooms > 1 else ""
+            await evt.reply(f"🔊 `{user_id}` wurde{rooms_text} entstummt.")
             self.log.info(
-                "Manuelles Unmute: %s in %s von %s.", user_id, target_room, evt.sender
+                "Manuelles Unmute: %s in %d Räumen von %s.",
+                user_id,
+                unmuted_rooms,
+                evt.sender,
             )
         else:
             await evt.reply(
@@ -3102,7 +3210,7 @@ class URLFilterBot(Plugin):
             return
 
         help_text = (
-            "🤖 **URL-Filter-Bot — Befehlsübersicht (v2.5.0)**\n\n"
+            "🤖 **URL-Filter-Bot — Befehlsübersicht (v2.6.0)**\n\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             "🔓 **Öffentliche Befehle**\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -3365,17 +3473,29 @@ class URLFilterBot(Plugin):
     # ===========================================================================
 
     async def _redact(self, room_id: RoomID, event_id: EventID, reason: str) -> bool:
-        try:
-            await self.client.redact(room_id, event_id, reason=reason)
-            return True
-        except Exception as exc:
-            self.log.warning(
-                "LÖSCHEN FEHLGESCHLAGEN: ereignis=%s raum=%s Fehler: %s — Bot benötigt PL 50+.",
-                event_id,
-                room_id,
-                exc,
-            )
-            return False
+        await self._redact_queue.put((room_id, event_id, reason))
+        return True
+
+    async def _redact_worker(self) -> None:
+        while True:
+            room_id, event_id, reason = await self._redact_queue.get()
+            try:
+                for attempt in range(3):
+                    try:
+                        await self.client.redact(room_id, event_id, reason=reason)
+                        break
+                    except Exception as exc:
+                        if attempt < 2:
+                            await asyncio.sleep(1.0 * (attempt + 1))
+                        else:
+                            self.log.warning(
+                                "LÖSCHEN FEHLGESCHLAGEN (nach 3 Versuchen): ereignis=%s raum=%s Fehler: %s — Bot benötigt PL 50+.",
+                                event_id,
+                                room_id,
+                                exc,
+                            )
+            finally:
+                self._redact_queue.task_done()
 
     async def _send_notice(
         self,

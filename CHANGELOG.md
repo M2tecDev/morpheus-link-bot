@@ -3,6 +3,19 @@
 Alle wichtigen Änderungen am **morpheus-link-bot** werden hier dokumentiert.
 Das Format orientiert sich an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/) und [Semantic Versioning](https://semver.org/lang/de/).
 
+## [2.6.0] - 2026-04-26
+
+**Neues Feature: Globales Stummschalten**
+
+- **`global_mute`-Option (true/false, Standard: true)** — Wenn aktiviert, wird ein Nutzer bei einem automatischen Verstoß oder einem manuellen `!mute`-Befehl in **allen** Räumen stummgeschaltet, in denen der Bot aktiv ist und ein höheres Powerlevel als der Zielnutzer hat. Bei `false` gilt das bisherige Verhalten: nur der Raum des Verstoßes bzw. Befehls wird betroffen.
+- **`_get_mute_target_rooms()`** — Neue Hilfsfunktion, die alle beigetretenen Räume parallel via `asyncio.gather` prüft und nur jene zurückgibt, in denen der Bot PL > 0 und PL > Zielnutzer hat. Blockiert den Event-Loop nicht.
+- **`_mute_user_global()` / `_unmute_user_global()`** — Neue Orchestrierungsfunktionen, die den room-übergreifenden Mute-/Unmute-Vorgang verwalten und die Anzahl der betroffenen Räume zurückgeben.
+- **Umstrukturiertes `_active_mutes`** — Das interne State-Dictionary wurde von `Dict[Tuple[str, str], float]` auf `Dict[str, List[Dict[str, Any]]]` umgestellt, um mehrere Räume pro Nutzer zu verfolgen.
+- **`_mute_user()` / `_do_unmute_user()` als pure API-Wrapper** — Diese Funktionen manipulieren `_active_mutes` nicht mehr selbst; die Zeiterfassung erfolgt ausschließlich in `_mute_user_global()`.
+- **Angepasste Rückmeldungen** — `!mute`, `!unmute` und automatische Verstöße melden die Anzahl der betroffenen Räume (z. B. „in 4 Räumen stummgeschaltet"), wenn mehr als ein Raum betroffen ist.
+
+---
+
 ## [2.5.0] - 2026-04-19
 
 **Bugfixes & Verbesserungen**

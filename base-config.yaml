@@ -1,5 +1,5 @@
 # =============================================================================
-# base-config.yaml — Standardkonfiguration (v2.5.0)
+# base-config.yaml — Standardkonfiguration (v2.6.0)
 # =============================================================================
 #
 # Diese Standardwerte können nach dem Erstellen einer Instanz im Maubot-Dashboard
@@ -134,6 +134,13 @@ mute_duration_minutes: 60
 # Hinweis: Betrifft NUR die manuellen Befehle !mute / !unmute, NICHT das
 # automatische Stummschalten via mute_enabled / mute_threshold.
 mute_commands_enabled: true
+
+# Globales Stummschalten aktivieren (true/false).
+# Wenn true, wird ein Nutzer bei einem Verstoß oder einem !mute-Befehl in ALLEN
+# Räumen stummgeschaltet, in denen der Bot aktiv ist und ein höheres Powerlevel
+# als der Zielnutzer hat. Bei false wird nur der Raum des Verstoßes / Befehls
+# verwendet.
+global_mute: true
 
 
 # -----------------------------------------------------------------------------

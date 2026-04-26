@@ -10,7 +10,7 @@ Eine klare Beschreibung des Fehlers (z.B. "Domain wird trotz Whitelist blockiert
 
 **Betroffene Umgebung**
 - Maubot Version:
-- Plugin Version: 2.5.0
+- Plugin Version: 2.6.0
 - Matrix Homeserver (z.B. Synapse, Dendrite):
 
 **Beispielnachricht**

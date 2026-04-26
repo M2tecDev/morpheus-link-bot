@@ -1,4 +1,4 @@
-# URL-Filter-Bot für Matrix — v2.5.0
+# URL-Filter-Bot für Matrix — v2.6.0
 [![Made for Matrix](https://img.shields.io/badge/Made%20for%20Matrix-000000?logo=matrix&logoColor=white)](https://matrix.org/)
 
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
@@ -12,7 +12,7 @@
 
 Ein Maubot-Plugin, das eingehende Nachrichten in Matrix-Räumen auf URLs scannt und diese gegen konfigurierbare Blacklists und Whitelists prüft. Unbekannte Links werden automatisch zur Moderatorenüberprüfung weitergeleitet. Enthält automatischen Spam-Schutz mit optionalem Stummschalten, eine vollständig datenbankgestützte Persistenz und DSGVO-konforme Datenhaltung.
 
-> **Neu in v2.5.0:** Kein Netzwerkzugriff nach Redaktion gesperrter Nachrichten · `!hilfe` ist in Gruppenräumen vollständig stumm · `!urlstatus` akzeptiert jetzt vollständige URLs mit Protokoll und Pfad.
+> **Neu in v2.6.0:** Globales Stummschalten (`global_mute`) — ein `!mute` oder automatischer Verstoß greift nun in allen Räumen gleichzeitig, in denen der Bot aktiv ist.
 
 ---
 
@@ -65,9 +65,9 @@ Ein Maubot-Plugin, das eingehende Nachrichten in Matrix-Räumen auf URLs scannt 
 | Befehl | Beschreibung |
 |--------|-------------|
 | `!urlstatus <domain>` | Zeigt ob eine Domain whitelisted, blacklisted oder unbekannt ist — inklusive Wildcard- und Apex-Treffern. Akzeptiert auch vollständige URLs: `!urlstatus https://example.com/` wird automatisch auf `example.com` normalisiert. |
-| `!liststats` | Gibt die Anzahl geladener Domains sowie Wildcards und offene Überprüfungen aus. |
+| `!stats` | Gibt die Anzahl geladener Domains sowie Wildcards und offene Überprüfungen aus. |
 | `!hilfe` | Zeigt die vollständige Befehlsübersicht — **nur per Direktnachricht (DM)**. In Gruppenräumen reagiert der Bot vollständig lautlos auf diesen Befehl. |
-| `!botstatus` | Zeigt den aktuellen Bot-Status inkl. Datenbankverbindung und Listengröße. |
+| `!status` | Zeigt den aktuellen Bot-Status inkl. Datenbankverbindung, Uptime und Version. |
 
 ### Moderationsbefehle (erfordern Berechtigung)
 
@@ -177,6 +177,7 @@ Diese Optionen werden in `base-config.yaml` definiert und können pro Instanz im
 | `mute_window_minutes` | `5` | Beobachtungsfenster (Minuten), innerhalb dessen Verstöße eines Nutzers gezählt werden. |
 | `mute_duration_minutes` | `60` | Dauer der automatischen Stummschaltung (Minuten). `0` = unbegrenzt. Ein Hintergrund-Task hebt die Stummschaltung nach Ablauf automatisch auf. |
 | `mute_commands_enabled` | `true` | Manuelle `!mute`- und `!unmute`-Befehle aktivieren. Auf `false` setzen, wenn mehrere Moderations-Bots gleichzeitig im Raum aktiv sind. Betrifft **nicht** das automatische Stummschalten. |
+| `global_mute` | `true` | Globales Stummschalten. Wenn `true`, wird ein Nutzer bei einem Verstoß oder einem `!mute`-Befehl in **allen** Räumen stummgeschaltet, in denen der Bot ein höheres Powerlevel als der Zielnutzer hat. |
 
 ### Leistungsoptimierung
 
