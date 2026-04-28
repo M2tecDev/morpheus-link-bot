@@ -1,4 +1,4 @@
-# URL-Filter-Bot für Matrix — v2.6.0
+# URL-Filter-Bot für Matrix — v2.6.1
 [![Made for Matrix](https://img.shields.io/badge/Made%20for%20Matrix-000000?logo=matrix&logoColor=white)](https://matrix.org/)
 
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
@@ -12,7 +12,7 @@
 
 Ein Maubot-Plugin, das eingehende Nachrichten in Matrix-Räumen auf URLs scannt und diese gegen konfigurierbare Blacklists und Whitelists prüft. Unbekannte Links werden automatisch zur Moderatorenüberprüfung weitergeleitet. Enthält automatischen Spam-Schutz mit optionalem Stummschalten, eine vollständig datenbankgestützte Persistenz und DSGVO-konforme Datenhaltung.
 
-> **Neu in v2.6.0:** Globales Stummschalten (`global_mute`) — ein `!mute` oder automatischer Verstoß greift nun in allen Räumen gleichzeitig, in denen der Bot aktiv ist.
+> **Neu in v2.6.1:** Prioritätsreihenfolge Exakt > Wildcard > Apex + keine Mute-Operationen in DMs.
 
 ---
 
@@ -34,7 +34,7 @@ Ein Maubot-Plugin, das eingehende Nachrichten in Matrix-Räumen auf URLs scannt 
 
 **Automatische URL-Filterung** — Der Bot überwacht alle Textnachrichten in überwachten Räumen. Enthält eine Nachricht eine URL oder Domain, prüft er diese sofort gegen Blacklist und Whitelist.
 
-**Drei-Wege-Routing** — Jede erkannte Domain landet in einer von drei Kategorien: Whitelist (erlaubt), Blacklist (gesperrt) oder Unbekannt (zur Überprüfung). Die Whitelist hat immer Vorrang, auch gegenüber einem gleichzeitigen Blacklist-Eintrag.
+**Drei-Wege-Routing** — Jede erkannte Domain landet in einer von drei Kategorien: Whitelist (erlaubt), Blacklist (gesperrt) oder Unbekannt (zur Überprüfung). Die Spezifität bestimmt die Priorität: Exakte Treffer > Wildcard-Treffer > Apex-Treffer. Bei gleicher Spezifität hat Whitelist Vorrang vor Blacklist.
 
 **Moderationsworkflow** — Unbekannte Domains werden automatisch an einen konfigurierten Moderationsraum weitergeleitet. Moderatoren entscheiden dort per Emoji-Reaktion (✅ / ❌) oder Textbefehl. Die Entscheidung wird sofort aktiv und in der Datenbank sowie in der jeweiligen `custom.txt` gespeichert.
 

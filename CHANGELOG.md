@@ -3,6 +3,15 @@
 Alle wichtigen Änderungen am **morpheus-link-bot** werden hier dokumentiert.
 Das Format orientiert sich an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/) und [Semantic Versioning](https://semver.org/lang/de/).
 
+## [2.6.1] - 2026-04-28
+
+**Bugfixes**
+
+- **Priorität Exakt > Wildcard > Apex (Fix #22)** — Domains werden jetzt in der korrekten Reihenfolge geprüft: Exakte Treffer haben Vorrang vor Wildcards, Wildcards vor Apex-Matches. Ein exakter Blacklist-Eintrag (`sub.example.com`) wird nicht mehr von einem Apex-Whitelist-Eintrag (`example.com`) überschrieben.
+- **Keine Mute-Operationen in Direct Messages (Fix #23)** — `_get_mute_target_rooms()` filtert jetzt Räume mit ≤2 Mitgliedern (DM-Räume) aus. Ebenso werden keine "entstummt"-Nachrichten in DMs gesendet. Verhindert verwirrende Benachrichtigungen und unnötige plübergreifende Raumbley-Änderungen.
+
+---
+
 ## [2.6.0] - 2026-04-26
 
 **Neues Feature: Globales Stummschalten**

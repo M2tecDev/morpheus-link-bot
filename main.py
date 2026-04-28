@@ -1768,24 +1768,35 @@ class URLFilterBot(Plugin):
         whitelisted: List[str] = []
 
         for domain in domains:
-            # Fix #18: Priorität Exakt > Wildcard > Apex — jede Ebene wird für
-            # Whitelist UND Blacklist geprüft, bevor zur nächsten Ebene gewechselt wird.
-            # Verhindert, dass ein Apex-WL-Eintrag (example.com) einen exakten
-            # BL-Eintrag (sub.example.com) überschreibt und umgekehrt.
+            # Priorität: Exakt > Wildcard > Apex — bei gleicher Spezifität gilt:
+            # Whitelist hat Vorrang vor Blacklist.
+            # Das stellt sicher, dass ein exakter Blacklist-Eintrag (sub.example.com)
+            # nicht von einem Apex-Wildcard-Eintrag (example.com) ueberschrieben wird.
+            is_whitelisted = False
+
+            # -- Stufe 1: Exakte Treffer --
             if domain in self.whitelist_set:
-                whitelisted.append(domain)
+                is_whitelisted = True
             elif domain in self.blacklist_set:
-                blacklisted.append(domain)
+                is_whitelisted = False
+            # -- Stufe 2: Wildcard-Treffer --
             elif self._matches_wildcards(domain, self.whitelist_wildcards):
-                whitelisted.append(domain)
+                is_whitelisted = True
             elif self._matches_wildcards(domain, self.blacklist_wildcards):
-                blacklisted.append(domain)
+                is_whitelisted = False
+            # -- Stufe 3: Apex-Treffer --
             elif self._matches_apex(domain, self.whitelist_set):
-                whitelisted.append(domain)
+                is_whitelisted = True
             elif self._matches_apex(domain, self.blacklist_set):
-                blacklisted.append(domain)
+                is_whitelisted = False
             else:
                 unknown.append(domain)
+                continue
+
+            if is_whitelisted:
+                whitelisted.append(domain)
+            else:
+                blacklisted.append(domain)
 
         message_redacted = False
 
@@ -2007,11 +2018,12 @@ class URLFilterBot(Plugin):
             return False
 
     async def _get_mute_target_rooms(self, target_user: str) -> List[str]:
-        """Gibt alle Räume zurück, in denen der Bot ein höheres PL als target_user hat."""
+        """Gibt alle Raeume zurueck, in denen der Bot ein hoeheres PL als target_user hat.
+        DM-Raeume (mit <= 2 Usern) werden ausgeschlossen."""
         try:
             joined = await self.client.get_joined_rooms()
         except Exception:
-            self.log.exception("Beitretene Räume konnten nicht abgerufen werden.")
+            self.log.exception("Beitretene Raeume konnten nicht abgerufen werden.")
             return []
 
         bot_id = str(self.client.mxid)
@@ -2028,13 +2040,31 @@ class URLFilterBot(Plugin):
                 if bot_pl > 0 and bot_pl > target_pl:
                     return rid
             except Exception:
-                self.log.debug("Power-Level-Prüfung für Raum %s fehlgeschlagen.", rid)
+                self.log.debug("Power-Level-Pruefung fuer Raum %s fehlgeschlagen.", rid)
             return None
 
         results: List[Optional[str]] = list(
             await asyncio.gather(*(_check(str(rid)) for rid in joined))
         )
-        return [r for r in results if r is not None]
+        candidate_rooms = [r for r in results if r is not None]
+
+        # DM-Raeume (mit <= 2 Usern) ausschliessen
+        filtered: List[str] = []
+        for rid in candidate_rooms:
+            if not await self._is_direct_room(RoomID(rid)):
+                filtered.append(rid)
+        return filtered
+
+    async def _is_direct_room(self, room_id: RoomID) -> bool:
+        """Gibt True zurueck, wenn der Raum ein Direct Message Raum ist (mit <= 2 Usern)."""
+        try:
+            members = await self.client.get_members(room_id)
+            member_count = len(members)
+            if member_count <= 2:
+                return True
+        except Exception:
+            pass
+        return False
 
     async def _mute_user_global(
         self, user_id: str, room_id: RoomID, duration_minutes: int
@@ -2104,6 +2134,10 @@ class URLFilterBot(Plugin):
                 ]
                 for entry in expired:
                     room_id = entry["room_id"]
+                    # Keine Entstumm-Nachrichten in DM-Raeumen senden
+                    if await self._is_direct_room(RoomID(room_id)):
+                        await self._do_unmute_user(user_id, room_id)
+                        continue
                     success = await self._do_unmute_user(user_id, room_id)
                     if success:
                         await self._send_notice(
