@@ -1,4 +1,4 @@
-# URL-Filter-Bot für Matrix — v2.6.1
+# URL-Filter-Bot für Matrix — v2.6.2
 [![Made for Matrix](https://img.shields.io/badge/Made%20for%20Matrix-000000?logo=matrix&logoColor=white)](https://matrix.org/)
 
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
@@ -12,7 +12,7 @@
 
 Ein Maubot-Plugin, das eingehende Nachrichten in Matrix-Räumen auf URLs scannt und diese gegen konfigurierbare Blacklists und Whitelists prüft. Unbekannte Links werden automatisch zur Moderatorenüberprüfung weitergeleitet. Enthält automatischen Spam-Schutz mit optionalem Stummschalten, eine vollständig datenbankgestützte Persistenz und DSGVO-konforme Datenhaltung.
 
-> **Neu in v2.6.1:** Prioritätsreihenfolge Exakt > Wildcard > Apex + keine Mute-Operationen in DMs.
+> **Neu in v2.6.2:** `!urlstatus` verwendet jetzt dieselbe Prioritätsreihenfolge (Exakt > Wildcard > Apex) wie der Haupt-Filter.
 
 ---
 
@@ -64,7 +64,7 @@ Ein Maubot-Plugin, das eingehende Nachrichten in Matrix-Räumen auf URLs scannt 
 
 | Befehl | Beschreibung |
 |--------|-------------|
-| `!urlstatus <domain>` | Zeigt ob eine Domain whitelisted, blacklisted oder unbekannt ist — inklusive Wildcard- und Apex-Treffern. Akzeptiert auch vollständige URLs: `!urlstatus https://example.com/` wird automatisch auf `example.com` normalisiert. |
+| `!urlstatus <domain>` | Zeigt ob eine Domain whitelisted, blacklisted oder unbekannt ist — inklusive Wildcard- und Apex-Treffern, mit identischer Priorität wie der Haupt-Filter (Exakt > Wildcard > Apex). Akzeptiert auch vollständige URLs: `!urlstatus https://example.com/` wird automatisch auf `example.com` normalisiert. |
 | `!stats` | Gibt die Anzahl geladener Domains sowie Wildcards und offene Überprüfungen aus. |
 | `!hilfe` | Zeigt die vollständige Befehlsübersicht — **nur per Direktnachricht (DM)**. In Gruppenräumen reagiert der Bot vollständig lautlos auf diesen Befehl. |
 | `!status` | Zeigt den aktuellen Bot-Status inkl. Datenbankverbindung, Uptime und Version. |

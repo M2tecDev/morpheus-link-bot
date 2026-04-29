@@ -1,5 +1,5 @@
 """
-URL-Filter-Bot — Hochleistungsedition  (v2.6.0)
+URL-Filter-Bot — Hochleistungsedition  (v2.6.2)
 ============================================
 
 Designziele
@@ -2833,6 +2833,8 @@ class URLFilterBot(Plugin):
                     else ""
                 )
                 results.append(f"✅ `{domain}` ist **whitelisted** (exakt){ignored}")
+            elif domain in self.blacklist_set:
+                results.append(f"🚫 `{domain}` ist **blacklisted** (exakt)")
             elif self._matches_wildcards(domain, self.whitelist_wildcards):
                 ignored = (
                     " · 🔇 Vorschau ignoriert"
@@ -2840,6 +2842,8 @@ class URLFilterBot(Plugin):
                     else ""
                 )
                 results.append(f"✅ `{domain}` ist **whitelisted** (Wildcard){ignored}")
+            elif self._matches_wildcards(domain, self.blacklist_wildcards):
+                results.append(f"🚫 `{domain}` ist **blacklisted** (Wildcard)")
             elif self._matches_apex(domain, self.whitelist_set):
                 ignored = (
                     " · 🔇 Vorschau ignoriert"
@@ -2847,10 +2851,6 @@ class URLFilterBot(Plugin):
                     else ""
                 )
                 results.append(f"✅ `{domain}` ist **whitelisted** (Apex){ignored}")
-            elif domain in self.blacklist_set:
-                results.append(f"🚫 `{domain}` ist **blacklisted** (exakt)")
-            elif self._matches_wildcards(domain, self.blacklist_wildcards):
-                results.append(f"🚫 `{domain}` ist **blacklisted** (Wildcard)")
             elif self._matches_apex(domain, self.blacklist_set):
                 results.append(f"🚫 `{domain}` ist **blacklisted** (Apex)")
             else:

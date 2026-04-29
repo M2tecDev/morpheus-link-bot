@@ -3,6 +3,14 @@
 Alle wichtigen Änderungen am **morpheus-link-bot** werden hier dokumentiert.
 Das Format orientiert sich an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/) und [Semantic Versioning](https://semver.org/lang/de/).
 
+## [2.6.2] - 2026-04-29
+
+**Bugfixes**
+
+- **`!urlstatus`-Priorität Exakt > Wildcard > Apex** — Die Prüfreihenfolge in `!urlstatus` wich von der des Haupt-Filters ab. War z. B. `sub.example.com` explizit in der Blacklist und `example.com` in der Whitelist, meldete `!urlstatus sub.example.com` fälschlicherweise `whitelisted (Apex)`, weil der Apex-Whitelist-Check vor dem exakten Blacklist-Check stattfand. Die Reihenfolge ist jetzt identisch zum Haupt-Filter: Exakt (Whitelist/Blacklist) → Wildcard → Apex.
+
+---
+
 ## [2.6.1] - 2026-04-28
 
 **Bugfixes**

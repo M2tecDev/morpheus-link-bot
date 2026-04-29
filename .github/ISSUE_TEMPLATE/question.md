@@ -14,7 +14,7 @@ Beispiele:
 
 **Betroffene Umgebung**
 - Maubot Version:
-- Plugin Version: 2.6.1
+- Plugin Version: 2.6.2
 - Matrix Homeserver (z. B. Synapse, Dendrite):
 
 **Relevante Konfiguration**
