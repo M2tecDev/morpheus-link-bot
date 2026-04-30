@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Morpheus Link Bot — Advanced URL Filtering for Matrix</title>
+  <meta name="description" content="Morpheus is a Maubot plugin for Matrix that automatically filters and moderates URLs in matrix chats. Includes customizable Blacklist/Whitelist, anti-spam protections, and automated moderation workflows." />
+  <link rel="stylesheet" href="../assets/css/styles.css" />
+  <link rel="alternate" href="../de/index.html" hreflang="de" />
+  <link rel="alternate" href="index.html" hreflang="en" />
+  <link rel="canonical" href="https://M2tecDev.github.io/morpheus-link-bot/en/index.html" />
+</head>
+<body>
+  <header class="site-header">
+    <nav class="lang-switch" aria-label="Language switcher">
+      <a href="../de/index.html" class="lang-link" title="Deutsch">Deutsch</a>
+      <span class="sep" aria-hidden="true">|</span>
+      <a href="index.html" class="lang-link" title="English">English</a>
+    </nav>
+  </header>
+  <main class="container">
+    <section id="intro">
+      <h2>Introduction</h2>
+      <p>
+        Morpheus is a Maubot plugin for Matrix that automatically filters and moderates URLs in Matrix chats.
+        It combines a customizable blacklist/whitelist, strong anti-spam protections, and automated moderation workflows
+        to keep channels safe.
+      </p>
+      <p>
+        Audience: Matrix admins, moderators, and communities that require reliable URL filtering, abuse protection,
+        and auditable moderation processes.
+      </p>
+      <p><strong>Keywords:</strong> Matrix, Maubot, URL filtering, Blacklist, Whitelist, phishing, anti-spam, moderation, link-filter, security.</p>
+    </section>
+
+    <section id="features">
+      <h2>Features</h2>
+      <ul>
+        <li>Customizable Blacklist/Whitelist for malicious links and phishing URLs.</li>
+        <li>Anti-spam protection with rate limiting and link scanning.</li>
+        <li>Automated moderation workflows (flagging, auto-remove, alerts).</li>
+        <li>Maubot integration for Matrix rooms.</li>
+        <li>Pattern-based URL filtering and extensible rules.</li>
+        <li>Audit logs and event hooks for transparency.</li>
+        <li>URL-shortener resolution (e.g. bit.ly, t.co) – verify final target domains.</li>
+        <li>GDPR-compliant persistence (hashing, 24h retention).</li>
+      </ul>
+    </section>
+
+    <section id="installation">
+      <h2>Installation</h2>
+      <p><strong>Prerequisites:</strong> Python 3.x, Maubot installed; Install the plugin via the Maubot dashboard (.mbp package); install dependencies with pip; configure the Morpheus plugin; restart Maubot.</p>
+    </section>
+
+    <section id="configuration">
+      <h2>Configuration</h2>
+      <p>Example environment variables: MORPHEUS_BLACKLIST, MORPHEUS_WHITELIST, MORPHEUS_SECRET_SALT (required). Other options: mod_room_id, command_rooms, enable_link_previews, link_preview_timeout, mute settings, etc.</p>
+    </section>
+
+    <section id="usage">
+      <h2>Usage</h2>
+      <p>Workflow: Morpheus scans messages, checks domains against blacklist/whitelist, resolves URL-shorteners when needed, applies anti-spam measures, and triggers moderation workflows. Unknown domains go to the moderation queue; whitelisted domains may receive a link preview.</p>
+    </section>
+
+    <section id="faq">
+      <h2>FAQ</h2>
+      <dl>
+        <dt>How does Morpheus handle phishing URLs?</dt>
+        <dd>It checks the final URL against the blacklist/whitelist and may trigger moderation actions.</dd>
+        <dt>How do I configure blacklists/whitelists?</dt>
+        <dd>Use the commands !block / !allow or edit the runtime lists in data/ (live lists).</dd>
+      </dl>
+    </section>
+
+    <section id="contributing">
+      <h2>Contributing</h2>
+      <p>Bug reports, feature requests and PRs are welcome. Please follow the project’s style, add tests, and update docs.</p>
+    </section>
+
+    <section id="seo">
+      <h2>SEO</h2>
+      <p>Keywords: Matrix, Maubot, URL filtering, phishing, blacklist, whitelist, anti-spam, moderation, link-filter.</p>
+    </section>
+  </main>
+  <footer class="footer">© Morpheus Link Bot</footer>
+</body>
+</html>

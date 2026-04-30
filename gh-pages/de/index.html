@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Morpheus Link Bot — Erweiterte URL-Filterung für Matrix</title>
+  <meta name="description" content="Morpheus ist ein Maubot-Plugin für Matrix. Automatisierte URL-Filterung mit Blacklist/Whitelist, Anti-Spam und Moderations-Workflows. Vollständig DSGVO-konform." />
+  <link rel="stylesheet" href="../assets/css/styles.css" />
+  <link rel="alternate" href="../en/index.html" hreflang="en" />
+  <link rel="alternate" href="index.html" hreflang="de" />
+  <link rel="canonical" href="https://M2tecDev.github.io/morpheus-link-bot/de/index.html" />
+</head>
+<body>
+  <header class="site-header">
+    <nav class="lang-switch" aria-label="Language switcher">
+      <a href="index.html" class="lang-link" title="Deutsch">Deutsch</a>
+      <span class="sep" aria-hidden="true">|</span>
+      <a href="../en/index.html" class="lang-link" title="English">English</a>
+    </nav>
+  </header>
+  <main class="container">
+    <section id="intro">
+      <h2>Einführung / Introduction</h2>
+      <p>
+        Morpheus ist ein Maubot-Plugin für Matrix, das URLs in Chats automatisch filtert,
+        bewertet und moderiert. Es kombiniert eine anpassbare Blacklist/Whitelist, robusten
+        Anti-Spam-Schutz und automatisierte Moderations-Workflows, um sichere Diskussionen
+        zu gewährleisten.
+      </p>
+      <p>
+        Zielgruppe: Matrix-Administratoren, Moderatoren und Communities, die zuverlässige
+        URL-Filterung, Missbrauchsschutz und nachvollziehbare Moderationsprozesse benötigen.
+      </p>
+      <p><strong>Keywords:</strong> Matrix, Maubot, URL filtering, Blacklist, Whitelist, phishing, anti-spam, moderation, link-filter, security.</p>
+    </section>
+
+    <section id="features">
+      <h2>Merkmale / Features</h2>
+      <ul>
+        <li>DE: Anpassbare Blacklist/Whitelist für schädliche Links und Phishing-URLs.</li>
+        <li>EN: Customizable Blacklist/Whitelist for malicious and phishing URLs.</li>
+        <li>DE: Anti-Spam-Schutz mit Ratenbegrenzung und Link-Scanning.</li>
+        <li>EN: Anti-spam protection with rate limiting and link scanning.</li>
+        <li>DE: Automatisierte Moderations-Workflows (Flaggen, Entfernen, Warnungen).</li>
+        <li>EN: Automated moderation workflows (flagging, auto-remove, alerts).</li>
+        <li>DE: Maubot-Integration für Matrix-Räume.</li>
+        <li>EN: Maubot integration for Matrix rooms.</li>
+        <li>DE: Musterbasierte URL-Filterung und erweiterbare Regeln.</li>
+        <li>EN: Pattern-based URL filtering and extensible rules.</li>
+        <li>DE: Audit-Logs und Event-Hooks für Transparenz.</li>
+        <li>EN: Audit logs and event hooks for transparency.</li>
+        <li>DE: URL-Shortener-Auflösung – finale Ziel-Domains prüfen.</li>
+        <li>EN: URL-shortener resolution – verify final target domains.</li>
+        <li>DE: DSGVO-konforme Persistenz (SHA-256-Hashing, 24h-Retention).</li>
+        <li>EN: GDPR-compliant persistence (hashing, 24h retention).</li>
+      </ul>
+    </section>
+
+    <section id="installation">
+      <h2>Installation / Installation</h2>
+      <p><strong>DE:</strong> Voraussetzungen: Python 3.x, Maubot installiert; Installation via das Plugin-Paket (.mbp) in Maubot; Abhängigkeiten per Pip installieren; Plugin in Maubot konfigurieren; Maubot neu starten.</p>
+      <p><strong>EN:</strong> Prerequisites: Python 3.x, Maubot installed; Install the plugin via the Maubot dashboard (.mbp package); install dependencies with pip; configure the Morpheus plugin; restart Maubot.</p>
+    </section>
+
+    <section id="configuration">
+      <h2>Konfiguration / Configuration</h2>
+      <p><strong>DE:</strong> Beispiel-Umgebungsvariablen: MORPHEUS_BLACKLIST, MORPHEUS_WHITELIST, MORPHEUS_SECRET_SALT (Pflicht). Weitere Optionen: mod_room_id, command_rooms, enable_link_previews, link_preview_timeout, mute settings, etc.</p>
+      <p><strong>EN:</strong> Example environment variables: MORPHEUS_BLACKLIST, MORPHEUS_WHITELIST, MORPHEUS_SECRET_SALT (required). Other options: mod_room_id, command_rooms, enable_link_previews, link_preview_timeout, mute settings, etc.</p>
+    </section>
+
+    <section id="usage">
+      <h2>Verwendung / Usage</h2>
+      <p><strong>DE:</strong> Typischer Ablauf: Morpheus scannt Nachrichten, prüft Domains gegen Blacklist/Whitelist, löst ggf. Shortener-URLs auf, wendet Anti-Spam-Mechanismen an und öffnet Moderations-Workflows. Unknown/Domains landen in der Moderations-Warteschlange; Whitelist-Domains erhalten ggf. eine Link-Vorschau.</p>
+      <p><strong>EN:</strong> Typical workflow: Morpheus scans messages, checks domains against blacklist/whitelist, resolves URL-shorteners when needed, applies anti-spam measures, and triggers moderation workflows. Unknown domains go to the moderation queue; whitelisted domains may receive a link preview.</p>
+    </section>
+
+    <section id="faq">
+      <h2>FAQ</h2>
+      <dl>
+        <dt>DE: Wie funktioniert Morpheus bei Phishing-URLs?</dt>
+        <dd>Morpheus prüft die finale Ziel-URL gegen die Blacklist/Whitelist. Phishing-URLs lösen Moderationsschritte aus.</dd>
+        <dt>EN: How does Morpheus handle phishing URLs?</dt>
+        <dd>It checks the final URL against the blacklist/whitelist and may trigger moderation actions.</dd>
+        <dt>DE: Wie konfiguriere ich Blacklists/Whitelists?</dt>
+        <dd>Verwende die Befehle !block / !allow oder bearbeite die entsprechenden Dateien unter data/ (laufende Listen).</dd>
+        <dt>EN: How do I configure blacklists/whitelists?</dt>
+        <dd>Use the commands !block / !allow or edit the runtime lists under data/ (live lists).</dd>
+      </dl>
+    </section>
+
+    <section id="contributing">
+      <h2>Contributing / Mitwirken</h2>
+      <p>DE: Bugreports, Feature-Requests und Pull Requests willkommen. Bitte Stil, Tests und Dokumentation beachten.</p>
+      <p>EN: Bug reports, feature requests and PRs are welcome. Please follow the project’s style, add tests, and update docs.</p>
+    </section>
+
+    <section id="seo">
+      <h2>SEO</h2>
+      <p>DE: Keywords: Matrix, Maubot, URL filtering, phishing, blacklist, whitelist, antispam, moderation, link-filter.</p>
+      <p>EN: Keywords: Matrix, Maubot, URL filtering, phishing, blacklist, whitelist, anti-spam, moderation, link-filter.</p>
+    </section>
+  </main>
+  <footer class="footer">© Morpheus Link Bot</footer>
+</body>
+</html>
