@@ -329,6 +329,12 @@ Das aktualisierte `.mbp` im Maubot-Dashboard hochladen und die Instanz neu start
 | Python | >= 3.10 |
 
 ---
+
+## Dokumentation / Documentation
+- Die zweisprachige Dokumentation für Morpheus Link Bot ist unter https://m2tecdev.github.io/morpheus-link-bot/ erreichbar.
+
+---
+
 ## Änderungsprotokoll
 
 Siehe das vollständige [Änderungsprotokoll (CHANGELOG.md)](CHANGELOG.md) für alle Versionen und detaillierten Änderungen.
