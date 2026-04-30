@@ -1,15 +1,28 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+        xmlns:xhtml="http://www.w3.org/1999/xhtml">
   <url>
-    <loc>https://m2tecdev.github.io/morpheus-link-bot/de/index.html</loc>
+    <loc>https://m2tecdev.github.io/morpheus-link-bot/</loc>
     <lastmod>2026-04-30</lastmod>
     <changefreq>weekly</changefreq>
-    <priority>0.8</priority>
+    <priority>1.0</priority>
+    <xhtml:link rel="alternate" hreflang="de" href="https://m2tecdev.github.io/morpheus-link-bot/de/"/>
+    <xhtml:link rel="alternate" hreflang="en" href="https://m2tecdev.github.io/morpheus-link-bot/en/"/>
   </url>
   <url>
-    <loc>https://m2tecdev.github.io/morpheus-link-bot/en/index.html</loc>
+    <loc>https://m2tecdev.github.io/morpheus-link-bot/de/</loc>
     <lastmod>2026-04-30</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.8</priority>
+    <xhtml:link rel="alternate" hreflang="de" href="https://m2tecdev.github.io/morpheus-link-bot/de/"/>
+    <xhtml:link rel="alternate" hreflang="en" href="https://m2tecdev.github.io/morpheus-link-bot/en/"/>
+  </url>
+  <url>
+    <loc>https://m2tecdev.github.io/morpheus-link-bot/en/</loc>
+    <lastmod>2026-04-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <xhtml:link rel="alternate" hreflang="de" href="https://m2tecdev.github.io/morpheus-link-bot/de/"/>
+    <xhtml:link rel="alternate" hreflang="en" href="https://m2tecdev.github.io/morpheus-link-bot/en/"/>
   </url>
 </urlset>

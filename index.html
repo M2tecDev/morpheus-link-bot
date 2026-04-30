@@ -5,28 +5,116 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Morpheus Link Bot — Zweisprachige Dokumentation</title>
   <meta name="description" content="Zweisprachige Dokumentation für Morpheus Link Bot (Matrix URL Filter & Moderation). Deutsch und Englisch, mit robusten SEO-Maßnahmen." />
+  <link rel="canonical" href="https://m2tecdev.github.io/morpheus-link-bot/" />
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://m2tecdev.github.io/morpheus-link-bot/" />
+  <meta property="og:title" content="Morpheus Link Bot — Zweisprachige Dokumentation" />
+  <meta property="og:description" content="Maubot-Plugin für Matrix: URL-Filterung, Anti-Spam und automatisierte Moderation. Jetzt auf Deutsch & Englisch." />
+  <meta property="og:locale" content="de_DE" />
+  <meta property="og:locale:alternate" content="en_GB" />
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="Morpheus Link Bot — Zweisprachige Dokumentation" />
+  <meta name="twitter:description" content="Maubot-Plugin für Matrix: URL-Filterung, Anti-Spam und Moderation." />
+
+  <!-- hreflang -->
+  <link rel="alternate" href="https://m2tecdev.github.io/morpheus-link-bot/de/" hreflang="de" />
+  <link rel="alternate" href="https://m2tecdev.github.io/morpheus-link-bot/en/" hreflang="en" />
+
+  <!-- Stylesheet -->
   <link rel="stylesheet" href="assets/css/styles.css" />
-  <link rel="alternate" href="/de/index.html" hreflang="de" />
-  <link rel="alternate" href="/en/index.html" hreflang="en" />
 </head>
 <body>
+  <!-- Skip Link für Barrierefreiheit -->
+  <a href="#main-content" class="skip-link">Zum Hauptinhalt springen</a>
+
+  <!-- Header -->
   <header class="site-header">
-    <nav class="lang-switch" aria-label="Language switcher">
-      <a href="/de/index.html" class="lang-link" title="Deutsch">Deutsch</a>
-      <span class="sep" aria-hidden="true">|</span>
-      <a href="/en/index.html" class="lang-link" title="English">English</a>
-    </nav>
-  </header>
-  <main class="container">
-    <section class="hero">
-      <h1>Morpheus Link Bot</h1>
-      <p>Wähle Deutsch oder English, um die vollständige zweisprachige Dokumentation zu sehen.</p>
-      <div class="cta-row">
-        <a class="cta" href="/de/index.html">Deutsch</a>
-        <a class="cta" href="/en/index.html">English</a>
+    <div class="container">
+      <div class="header-inner">
+        <a href="/" class="logo">
+          <span class="logo-icon">🛡️</span>
+          <span>Morpheus</span>
+        </a>
+
+        <!-- Mobile Menu Toggle -->
+        <button class="mobile-menu-toggle" aria-label="Menü öffnen" onclick="document.querySelector('.lang-switch').classList.toggle('open')">☰</button>
+
+        <!-- Language Switcher -->
+        <nav class="lang-switch" aria-label="Sprachauswahl">
+          <a href="de/" class="lang-link" hreflang="de">
+            <span class="lang-flag">🇩🇪</span>
+            <span>Deutsch</span>
+          </a>
+          <span class="lang-sep" aria-hidden="true">|</span>
+          <a href="en/" class="lang-link" hreflang="en">
+            <span class="lang-flag">🇬🇧</span>
+            <span>English</span>
+          </a>
+        </nav>
       </div>
-    </section>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main id="main-content">
+    <div class="container content-container">
+
+      <!-- Hero Section -->
+      <section class="hero">
+        <div class="hero-badge">
+          <span class="hero-badge-icon">✓</span>
+          <span>v2.6.2 — Maubot Plugin</span>
+        </div>
+
+        <h1>Morpheus <span>Link Bot</span></h1>
+
+        <p class="hero-description">
+          Automatisierte URL-Filterung für Matrix mit Blacklist/Whitelist,
+          Anti-Spam und DSGVO-konformer Moderation.
+        </p>
+
+        <!-- Language Selection Cards -->
+        <div class="lang-cards">
+          <a href="de/" class="lang-card">
+            <span class="lang-card-icon">🇩🇪</span>
+            <span class="lang-card-title">Deutsch</span>
+            <span class="lang-card-desc">Vollständige deutschsprachige Dokumentation mit Konfigurationsanleitung und FAQ</span>
+            <span class="lang-card-arrow">→</span>
+          </a>
+
+          <a href="en/" class="lang-card">
+            <span class="lang-card-icon">🇬🇧</span>
+            <span class="lang-card-title">English</span>
+            <span class="lang-card-desc">Complete English documentation with configuration guide and FAQ</span>
+            <span class="lang-card-arrow">→</span>
+          </a>
+        </div>
+      </section>
+
+    </div>
   </main>
-  <footer class="footer">© Morpheus Link Bot</footer>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <p>© 2026 Morpheus Link Bot — <a href="https://github.com/M2tecDev/morpheus-link-bot">GitHub</a></p>
+    </div>
+  </footer>
+
+  <!-- Mobile Menu Script -->
+  <script>
+    // Close mobile menu when clicking outside
+    document.addEventListener('click', function(e) {
+      const nav = document.querySelector('.lang-switch');
+      const toggle = document.querySelector('.mobile-menu-toggle');
+      if (!nav.contains(e.target) && !toggle.contains(e.target)) {
+        nav.classList.remove('open');
+      }
+    });
+  </script>
 </body>
 </html>

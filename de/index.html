@@ -4,83 +4,806 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Morpheus Link Bot — Erweiterte URL-Filterung für Matrix</title>
-  <meta name="description" content="Morpheus ist ein Maubot-Plugin für Matrix. Automatisierte URL-Filterung mit Blacklist/Whitelist, Anti-Spam und Moderations-Workflows. Vollständig DSGVO-konform." />
+  <meta name="description" content="Morpheus ist ein Maubot-Plugin für Matrix. Automatisierte URL-Filterung mit Blacklist/Whitelist, Anti-Spam und DSGVO-konformer Moderation." />
+  <link rel="canonical" href="https://m2tecdev.github.io/morpheus-link-bot/de/" />
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="article" />
+  <meta property="og:url" content="https://m2tecdev.github.io/morpheus-link-bot/de/" />
+  <meta property="og:title" content="Morpheus Link Bot — Erweiterte URL-Filterung für Matrix" />
+  <meta property="og:description" content="Maubot-Plugin für Matrix: URL-Filterung, Blacklist/Whitelist, Anti-Spam und DSGVO-konforme Moderations-Workflows." />
+  <meta property="og:locale" content="de_DE" />
+  <meta property="og:locale:alternate" content="en_GB" />
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="Morpheus Link Bot — Erweiterte URL-Filterung für Matrix" />
+  <meta name="twitter:description" content="Maubot-Plugin für Matrix: URL-Filterung, Anti-Spam und Moderation." />
+
+  <!-- hreflang -->
+  <link rel="alternate" href="https://m2tecdev.github.io/morpheus-link-bot/de/" hreflang="de" />
+  <link rel="alternate" href="https://m2tecdev.github.io/morpheus-link-bot/en/" hreflang="en" />
+
+  <!-- Stylesheet -->
   <link rel="stylesheet" href="../assets/css/styles.css" />
-  <link rel="alternate" href="../en/index.html" hreflang="en" />
-  <link rel="alternate" href="index.html" hreflang="de" />
 </head>
 <body>
+  <!-- Skip Link für Barrierefreiheit -->
+  <a href="#main-content" class="skip-link">Zum Hauptinhalt springen</a>
+
+  <!-- Header -->
   <header class="site-header">
-    <nav class="lang-switch" aria-label="Language switcher">
-      <a href="index.html" class="lang-link" title="Deutsch">Deutsch</a>
-      <span class="sep" aria-hidden="true">|</span>
-      <a href="../en/index.html" class="lang-link" title="English">English</a>
-    </nav>
+    <div class="container">
+      <div class="header-inner">
+        <a href="../" class="logo">
+          <span class="logo-icon">🛡️</span>
+          <span>Morpheus</span>
+        </a>
+
+        <!-- Mobile Menu Toggle -->
+        <button class="mobile-menu-toggle" aria-label="Menü öffnen" onclick="document.querySelector('.lang-switch').classList.toggle('open')">☰</button>
+
+        <!-- Language Switcher -->
+        <nav class="lang-switch" aria-label="Sprachauswahl">
+          <a href="./" class="lang-link active" hreflang="de">
+            <span class="lang-flag">🇩🇪</span>
+            <span>Deutsch</span>
+          </a>
+          <span class="lang-sep" aria-hidden="true">|</span>
+          <a href="../en/" class="lang-link" hreflang="en">
+            <span class="lang-flag">🇬🇧</span>
+            <span>English</span>
+          </a>
+        </nav>
+      </div>
+    </div>
   </header>
-  <main class="container">
-    <section id="intro">
-      <h2>Einführung / Introduction</h2>
-      <p>
-        Morpheus ist ein Maubot-Plugin für Matrix, das URLs in Chats automatisch filtert, bewertet und moderiert.
-        Es kombiniert eine anpassbare Blacklist/Whitelist, robusten Anti-Spam-Schutz und automatisierte Moderations-Workflows,
-        um sichere Diskussionen zu gewährleisten.
-      </p>
-      <p>
-        Zielgruppe: Matrix-Administratoren, Moderatoren und Communities, die zuverlässige URL-Filterung,
-        Missbrauchsschutz und nachvollziehbare Moderationsprozesse benötigen.
-      </p>
-      <p><strong>Keywords:</strong> Matrix, Maubot, URL filtering, Blacklist, Whitelist, phishing, anti-spam, moderation, link-filter, security.</p>
-    </section>
 
-    <section id="features">
-      <h2>Merkmale / Features</h2>
-      <ul>
-        <li>Anpassbare Blacklist/Whitelist für schädliche Links und Phishing-URLs.</li>
-        <li>Anti-Spam-Schutz mit Ratenbegrenzung und Link-Scanning.</li>
-        <li>Automatisierte Moderations-Workflows (Flaggen, Entfernen, Warnungen).</li>
-        <li>Maubot-Integration für Matrix-Räume.</li>
-        <li>Musterbasierte URL-Filterung und erweiterbare Regeln.</li>
-        <li>Audit-Logs und Event-Hooks für Transparenz.</li>
-        <li>URL-Shortener-Auflösung (z. B. bit.ly, t.co) – finale Ziel-Domains prüfen.</li>
-        <li>DSGVO-konforme Persistenz (Hashing, 24h-Retention).</li>
-      </ul>
-    </section>
+  <!-- Main Content -->
+  <main id="main-content">
+    <div class="container content-container">
 
-    <section id="installation">
-      <h2>Installation / Installation</h2>
-      <p><strong>Voraussetzungen:</strong> Python 3.x, Maubot installiert; Plugin via Dashboard (.mbp); Abhängigkeiten via pip; Morpheus konfigurieren; Maubot neustarten.</p>
-    </section>
+      <!-- Breadcrumb Navigation -->
+      <nav class="breadcrumb" aria-label="Breadcrumb">
+        <a href="../" class="breadcrumb-link">
+          <span>🏠</span>
+          <span>Startseite</span>
+        </a>
+        <span class="breadcrumb-sep" aria-hidden="true">›</span>
+        <span class="breadcrumb-current" aria-current="page">Deutsch</span>
+      </nav>
 
-    <section id="configuration">
-      <h2>Konfiguration / Configuration</h2>
-      <p>Beispiel-Umgebungsvariablen: MORPHEUS_BLACKLIST, MORPHEUS_WHITELIST, MORPHEUS_SECRET_SALT (erforderlich). Weitere Optionen: mod_room_id, command_rooms, enable_link_previews, link_preview_timeout, mute settings, etc.</p>
-    </section>
+      <!-- Language Badge -->
+      <div class="lang-badge">
+        🇩🇪 Deutsch — Vollständige Dokumentation v2.6.2
+      </div>
 
-    <section id="usage">
-      <h2>Verwendung / Usage</h2>
-      <p>Workflow: Morpheus scannt Nachrichten, prüft Domains gegen Blacklist/Whitelist, löst ggf. Shortener-URLs auf, wendet Anti-Spam-Maßnahmen an und startet Moderations-Workflows. Unbekannte Domains landen in der Moderations-Warteschlange; Whitelist-Domains erhalten ggf. eine Link-Vorschau.</p>
-    </section>
+      <!-- Page Header -->
+      <header class="page-header">
+        <h1 class="page-title">Erweiterte URL-Filterung für Matrix</h1>
+        <p class="page-subtitle">
+          Morpheus ist ein Maubot-Plugin, das eingehende Nachrichten in Matrix-Räumen
+          auf URLs scannt und diese gegen konfigurierbare Blacklists und Whitelists prüft.
+        </p>
+      </header>
 
-    <section id="faq">
-      <h2>FAQ</h2>
-      <dl>
-        <dt>Wie funktioniert Morpheus bei Phishing-URLs?</dt>
-        <dd>Mor­pheus prüft die finale Ziel-URL gegen die Blacklist/Whitelist; Phishing-URLs lösen Moderationsschritte aus.</dd>
-        <dt>Wie konfiguriere ich Blacklists/Whitelists?</dt>
-        <dd>Verwende die Befehle !block / !allow oder bearbeite die Laufzeitleisten unter data/.</dd>
-      </dl>
-    </section>
+      <!-- Funktionsübersicht -->
+      <section class="content-section" id="features-overview">
+        <h2 class="section-title">
+          <span class="section-icon">⚡</span>
+          Funktionsübersicht
+        </h2>
 
-    <section id="contributing">
-      <h2>Contributing / Mitwirken</h2>
-      <p>Bugreports, Feature-Requests und PRs sind willkommen. Bitte Folg den Projekt-Richtlinien, füge Tests hinzu und aktualisiere die Doku.</p>
-    </section>
+        <div class="feature-list">
+          <div class="feature-item">
+            <span class="feature-icon">🔍</span>
+            <div class="feature-text">
+              <span class="feature-title">Automatische URL-Filterung</span>
+              <span class="feature-desc">Der Bot überwacht alle Textnachrichten in überwachten Räumen. Enthält eine Nachricht eine URL oder Domain, prüft er diese sofort gegen Blacklist und Whitelist.</span>
+            </div>
+          </div>
 
-    <section id="seo">
-      <h2>SEO</h2>
-      <p>Keywords: Matrix, Maubot, URL filtering, phishing, blacklist, whitelist, anti-spam, moderation, link-filter.</p>
-    </section>
+          <div class="feature-item">
+            <span class="feature-icon">🔀</span>
+            <div class="feature-text">
+              <span class="feature-title">Drei-Wege-Routing</span>
+              <span class="feature-desc">Jede erkannte Domain landet in einer von drei Kategorien: Whitelist (erlaubt), Blacklist (gesperrt) oder Unbekannt (zur Überprüfung). Die Spezifität bestimmt die Priorität: Exakte Treffer > Wildcard-Treffer > Apex-Treffer.</span>
+            </div>
+          </div>
+
+          <div class="feature-item">
+            <span class="feature-icon">⚙️</span>
+            <div class="feature-text">
+              <span class="feature-title">Moderationsworkflow</span>
+              <span class="feature-desc">Unbekannte Domains werden automatisch an einen konfigurierten Moderationsraum weitergeleitet. Moderatoren entscheiden per Emoji-Reaktion (✅ / ❌) oder Textbefehl.</span>
+            </div>
+          </div>
+
+          <div class="feature-item">
+            <span class="feature-icon">💾</span>
+            <div class="feature-text">
+              <span class="feature-title">Datenbankgestützte Persistenz</span>
+              <span class="feature-desc">Alle Runtime-Moderationsentscheidungen sowie offene Moderationsanfragen werden in Maubots nativer Datenbank gespeichert. Bot-Neustarts sind vollständig stateful.</span>
+            </div>
+          </div>
+
+          <div class="feature-item">
+            <span class="feature-icon">🔐</span>
+            <div class="feature-text">
+              <span class="feature-title">DSGVO / Privacy by Design</span>
+              <span class="feature-desc">Matrix-Nutzer-IDs werden ausschließlich als SHA-256(secret_salt:user_id)-Hash gespeichert. Ein Hintergrund-Retention-Loop löscht Verstoßdaten automatisch nach 24 Stunden.</span>
+            </div>
+          </div>
+
+          <div class="feature-item">
+            <span class="feature-icon">🎯</span>
+            <div class="feature-text">
+              <span class="feature-title">Befehlsraum-Einschränkung</span>
+              <span class="feature-desc">Über command_rooms kann festgelegt werden, in welchen Räumen der Bot auf Befehle reagiert. Der Moderationsraum und Direktnachrichten sind immer erlaubt.</span>
+            </div>
+          </div>
+
+          <div class="feature-item">
+            <span class="feature-icon">🌐</span>
+            <div class="feature-text">
+              <span class="feature-title">Wildcard-Unterstützung</span>
+              <span class="feature-desc">Einträge wie *.boese-seite.com sperren alle Subdomains auf einmal. Funktioniert in Blacklist und Whitelist gleichermaßen.</span>
+            </div>
+          </div>
+
+          <div class="feature-item">
+            <span class="feature-icon">🏔️</span>
+            <div class="feature-text">
+              <span class="feature-title">Apex-Domain-Matching</span>
+              <span class="feature-desc">Ist evil.com direkt in der Blacklist, werden Subdomains wie sub.evil.com automatisch mitgeblockt — ohne gesonderten Wildcard-Eintrag.</span>
+            </div>
+          </div>
+
+          <div class="feature-item">
+            <span class="feature-icon">🔗</span>
+            <div class="feature-text">
+              <span class="feature-title">URL-Shortener-Auflösung</span>
+              <span class="feature-desc">Bekannte Kurzlink-Dienste (bit.ly, t.co, tinyurl.com u.a.) werden via HEAD-Request aufgelöst. Die finale Ziel-Domain wird geprüft.</span>
+            </div>
+          </div>
+
+          <div class="feature-item">
+            <span class="feature-icon">🛡️</span>
+            <div class="feature-text">
+              <span class="feature-title">Spam-Schutz & Auto-Mute</span>
+              <span class="feature-desc">Ein konfigurierbarer Warn-Cooldown verhindert Notification Flooding. Optional können Nutzer bei Erreichen eines Verstoß-Schwellenwerts automatisch stummgeschaltet werden.</span>
+            </div>
+          </div>
+
+          <div class="feature-item">
+            <span class="feature-icon">🖼️</span>
+            <div class="feature-text">
+              <span class="feature-title">Linkvorschauen</span>
+              <span class="feature-desc">Für freigegebene URLs kann der Bot optional Open-Graph-Metadaten abrufen und eine Vorschau (Titel + Beschreibung) im Raum posten.</span>
+            </div>
+          </div>
+
+          <div class="feature-item">
+            <span class="feature-icon">🔄</span>
+            <div class="feature-text">
+              <span class="feature-title">Event-ID-Deduplizierung</span>
+              <span class="feature-desc">Ein interner LRU-Cache (1.000 Einträge) verhindert Doppelverarbeitung bei Matrix-Sync-Replays nach Bot-Neustarts.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Verfügbare Befehle -->
+      <section class="content-section" id="commands">
+        <h2 class="section-title">
+          <span class="section-icon">⌨️</span>
+          Verfügbare Befehle
+        </h2>
+
+        <h3 style="font-size: var(--text-xl); margin: var(--space-4) 0 var(--space-2); color: var(--color-fg);">Öffentliche Befehle (für alle Nutzer)</h3>
+
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Befehl</th>
+                <th>Beschreibung</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>!urlstatus &lt;domain&gt;</code></td>
+                <td>Zeigt ob eine Domain whitelisted, blacklisted oder unbekannt ist — inklusive Wildcard- und Apex-Treffern. Akzeptiert auch vollständige URLs.</td>
+              </tr>
+              <tr>
+                <td><code>!stats</code></td>
+                <td>Gibt die Anzahl geladener Domains sowie Wildcards und offene Überprüfungen aus.</td>
+              </tr>
+              <tr>
+                <td><code>!hilfe</code></td>
+                <td>Zeigt die vollständige Befehlsübersicht — <strong>nur per Direktnachricht (DM)</strong>. In Gruppenräumen reagiert der Bot nicht.</td>
+              </tr>
+              <tr>
+                <td><code>!status</code></td>
+                <td>Zeigt den aktuellen Bot-Status inkl. Datenbankverbindung, Uptime und Version.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 style="font-size: var(--text-xl); margin: var(--space-5) 0 var(--space-2); color: var(--color-fg);">Moderationsbefehle (erfordern Berechtigung)</h3>
+
+        <div class="info-box tip">
+          <span class="info-box-icon">ℹ️</span>
+          <div class="info-box-content">
+            <div class="info-box-title">Berechtigungen</div>
+            <p>Ein Nutzer gilt als Moderator, wenn sein Powerlevel im Moderationsraum mindestens <code>min_power_level</code> (Standard: 50) beträgt oder seine Nutzer-ID in <code>allowed_users</code> eingetragen ist.</p>
+          </div>
+        </div>
+
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Befehl</th>
+                <th>Beschreibung</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>!allow &lt;domain&gt;</code></td>
+                <td>Domain sofort whitelisten. Unterstützt Wildcards: <code>!allow *.vertrauenswuerdig.de</code></td>
+              </tr>
+              <tr>
+                <td><code>!unallow &lt;domain&gt;</code></td>
+                <td>Domain oder Wildcard-Eintrag aus der Whitelist entfernen.</td>
+              </tr>
+              <tr>
+                <td><code>!block &lt;domain&gt;</code></td>
+                <td>Domain sofort blacklisten. Unterstützt Wildcards: <code>!block *.boese-seite.com</code></td>
+              </tr>
+              <tr>
+                <td><code>!unblock &lt;domain&gt;</code></td>
+                <td>Domain oder Wildcard-Eintrag aus der Blacklist entfernen.</td>
+              </tr>
+              <tr>
+                <td><code>!reloadlists</code></td>
+                <td>Alle .txt-Dateien neu einlesen — kein Neustart nötig.</td>
+              </tr>
+              <tr>
+                <td><code>!pending</code></td>
+                <td>Zeigt alle Domains, die aktuell auf eine Moderationsentscheidung warten.</td>
+              </tr>
+              <tr>
+                <td><code>!sendpending</code></td>
+                <td>Sendet alle offenen Überprüfungsalarme erneut in den Mod-Raum.</td>
+              </tr>
+              <tr>
+                <td><code>!mute &lt;@nutzer:server&gt; [-t Min.]</code></td>
+                <td>Nutzer manuell stummschalten (Powerlevel -1). Optional -t für Dauer in Minuten.</td>
+              </tr>
+              <tr>
+                <td><code>!unmute &lt;@nutzer:server&gt;</code></td>
+                <td>Stummschaltung eines Nutzers manuell aufheben.</td>
+              </tr>
+              <tr>
+                <td><code>!ignore &lt;domain&gt;</code></td>
+                <td>Domain zur Vorschau-Ignore-Liste hinzufügen.</td>
+              </tr>
+              <tr>
+                <td><code>!unignore &lt;domain&gt;</code></td>
+                <td>Domain von der Vorschau-Ignore-Liste entfernen.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 style="font-size: var(--text-xl); margin: var(--space-5) 0 var(--space-2); color: var(--color-fg);">Emoji-Reaktionen im Moderationsraum</h3>
+
+        <p>Wenn eine unbekannte Domain erkannt wird, postet der Bot eine Alarmmeldung im Moderationsraum mit zwei Reaktionsknöpfen:</p>
+
+        <ul style="margin: var(--space-3) 0; padding-left: var(--space-4);">
+          <li><strong>✅</strong> — Domain zur Whitelist hinzufügen und Originalnachricht genehmigen.</li>
+          <li><strong>❌</strong> — Domain zur Blacklist hinzufügen.</li>
+        </ul>
+
+        <div class="info-box warning">
+          <span class="info-box-icon">⚠️</span>
+          <div class="info-box-content">
+            <div class="info-box-title">Hinweis</div>
+            <p>Reaktionen von Nutzern ohne ausreichende Berechtigung werden still ignoriert.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Wie der Bot URLs erkennt -->
+      <section class="content-section" id="url-detection">
+        <h2 class="section-title">
+          <span class="section-icon">🔎</span>
+          Wie der Bot URLs erkennt
+        </h2>
+
+        <p>Der Bot verwendet vier Stufen, die nacheinander auf jede Nachricht angewendet werden:</p>
+
+        <div class="feature-list">
+          <div class="feature-item">
+            <span class="feature-icon">0️⃣</span>
+            <div class="feature-text">
+              <span class="feature-title">Stufe 0 — Matrix-ID-Bereinigung</span>
+              <span class="feature-desc">Matrix-Nutzer-IDs (@nutzer:homeserver) und Raum-IDs (!raum:homeserver) werden aus dem Nachrichtentext entfernt, bevor die URL-Erkennung greift. Verhindert Falschpositive.</span>
+            </div>
+          </div>
+
+          <div class="feature-item">
+            <span class="feature-icon">1️⃣</span>
+            <div class="feature-text">
+              <span class="feature-title">Stufe 1 — HTML-Links</span>
+              <span class="feature-desc">Matrix-Clients senden formatierte Nachrichten mit &lt;a href="..."&gt;. Diese Links werden als erstes und zuverlässigste Quelle ausgewertet.</span>
+            </div>
+          </div>
+
+          <div class="feature-item">
+            <span class="feature-icon">2️⃣</span>
+            <div class="feature-text">
+              <span class="feature-title">Stufe 2 — Klassische URLs</span>
+              <span class="feature-desc">Explizite URLs mit http://, https:// oder www.-Präfix werden per Regex erkannt.</span>
+            </div>
+          </div>
+
+          <div class="feature-item">
+            <span class="feature-icon">3️⃣</span>
+            <div class="feature-text">
+              <span class="feature-title">Stufe 3 — Nackte Domains</span>
+              <span class="feature-desc">Domains ohne Protokoll wie example.com werden erkannt, sofern ihre TLD zu einem bekannten Satz von ~230 gültigen Top-Level-Domains gehört. Das verhindert Falschpositive.</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="info-box tip">
+          <span class="info-box-icon">🔐</span>
+          <div class="info-box-content">
+            <div class="info-box-title">Unicode-Normalisierung</div>
+            <p>Alle extrahierten Domains werden vor dem Listen-Vergleich normalisiert — Vollbreite-Zeichen (like ｇｏｏｇｌｅ.com) sowie Unicode-Domains werden per IDNA in ihre Punycode-Form umgewandelt.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Wildcard-Einträge -->
+      <section class="content-section" id="wildcards">
+        <h2 class="section-title">
+          <span class="section-icon">🎭</span>
+          Wildcard-Einträge
+        </h2>
+
+        <p>Mit dem Präfix <code>*.</code> lassen sich ganze Domain-Familien auf einmal erfassen:</p>
+
+        <pre><code>!block *.boese-seite.com     → sperrt sub.boese-seite.com, api.boese-seite.com, ...
+!allow *.vertrauenswuerdig.de → whitelisted alle Subdomains</code></pre>
+
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Geprüfte Domain</th>
+                <th>Eintrag</th>
+                <th>Match?</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>sub.banned.com</code></td>
+                <td><code>*.banned.com</code></td>
+                <td>✅ Ja — Wildcard</td>
+              </tr>
+              <tr>
+                <td><code>api.banned.com</code></td>
+                <td><code>*.banned.com</code></td>
+                <td>✅ Ja — Wildcard</td>
+              </tr>
+              <tr>
+                <td><code>banned.com</code></td>
+                <td><code>*.banned.com</code></td>
+                <td>❌ Nein — Wildcard deckt nur Subdomains ab</td>
+              </tr>
+              <tr>
+                <td><code>sub.banned.com</code></td>
+                <td><code>banned.com</code> (exakt)</td>
+                <td>✅ Ja — Apex-Match</td>
+              </tr>
+              <tr>
+                <td><code>a.b.banned.com</code></td>
+                <td><code>banned.com</code> (exakt)</td>
+                <td>✅ Ja — Apex-Match</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="info-box warning">
+          <span class="info-box-icon">💡</span>
+          <div class="info-box-content">
+            <div class="info-box-title">Tipp</div>
+            <p>Soll auch die Hauptdomain selbst gesperrt werden, müssen <code>banned.com</code> und <code>*.banned.com</code> als zwei separate Einträge angelegt werden.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Konfigurationsoptionen -->
+      <section class="content-section" id="configuration">
+        <h2 class="section-title">
+          <span class="section-icon">⚙️</span>
+          Konfigurationsoptionen
+        </h2>
+
+        <p>Diese Optionen werden in <code>base-config.yaml</code> definiert und können pro Instanz im Maubot-Dashboard überschrieben werden.</p>
+
+        <h3 style="font-size: var(--text-lg); margin: var(--space-4) 0 var(--space-2); color: var(--color-fg);">Grundkonfiguration</h3>
+
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Parameter</th>
+                <th>Standard</th>
+                <th>Beschreibung</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>blacklist_dir</code></td>
+                <td><code>/data/blacklists/</code></td>
+                <td>Verzeichnis mit den Blacklist-.txt-Dateien.</td>
+              </tr>
+              <tr>
+                <td><code>whitelist_dir</code></td>
+                <td><code>/data/whitelists/</code></td>
+                <td>Verzeichnis mit den Whitelist-.txt-Dateien.</td>
+              </tr>
+              <tr>
+                <td><code>mod_room_id</code></td>
+                <td><em>(Pflichtfeld)</em></td>
+                <td>Matrix-Raum-ID des Moderationsraums (Format: <code>!xxx:homeserver</code>).</td>
+              </tr>
+              <tr>
+                <td><code>mod_permissions.min_power_level</code></td>
+                <td><code>50</code></td>
+                <td>Mindest-Powerlevel für Moderationsaktionen. 100 = nur Admin, 0 = jeder.</td>
+              </tr>
+              <tr>
+                <td><code>mod_permissions.allowed_users</code></td>
+                <td><code>[]</code></td>
+                <td>YAML-Array von Nutzer-IDs mit fester Moderationsberechtigung.</td>
+              </tr>
+              <tr>
+                <td><code>command_rooms</code></td>
+                <td><code>[]</code></td>
+                <td>Liste von Raum-IDs in denen der Bot auf Befehle reagiert.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 style="font-size: var(--text-lg); margin: var(--space-5) 0 var(--space-2); color: var(--color-fg);">Datenschutz / DSGVO</h3>
+
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Parameter</th>
+                <th>Standard</th>
+                <th>Beschreibung</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>secret_salt</code></td>
+                <td><em>(Pflichtfeld)</em></td>
+                <td>Zufälliger Geheimschlüssel für SHA-256-Nutzer-Hashing. Generierung: <code>python3 -c "import secrets; print(secrets.token_hex(32))"</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 style="font-size: var(--text-lg); margin: var(--space-5) 0 var(--space-2); color: var(--color-fg);">Linkvorschauen</h3>
+
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Parameter</th>
+                <th>Standard</th>
+                <th>Beschreibung</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>enable_link_previews</code></td>
+                <td><code>true</code></td>
+                <td>Linkvorschauen für whitelisted URLs aktivieren.</td>
+              </tr>
+              <tr>
+                <td><code>link_preview_timeout</code></td>
+                <td><code>5</code></td>
+                <td>HTTP-Timeout in Sekunden für Vorschau-Abrufe.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 style="font-size: var(--text-lg); margin: var(--space-5) 0 var(--space-2); color: var(--color-fg);">Spam-Schutz & Auto-Mute</h3>
+
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Parameter</th>
+                <th>Standard</th>
+                <th>Beschreibung</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>warn_cooldown</code></td>
+                <td><code>60</code></td>
+                <td>Warn-Cooldown in Sekunden.</td>
+              </tr>
+              <tr>
+                <td><code>mute_enabled</code></td>
+                <td><code>false</code></td>
+                <td>Automatisches Stummschalten aktivieren.</td>
+              </tr>
+              <tr>
+                <td><code>mute_threshold</code></td>
+                <td><code>5</code></td>
+                <td>Anzahl der Verstöße innerhalb des Beobachtungsfensters.</td>
+              </tr>
+              <tr>
+                <td><code>mute_window_minutes</code></td>
+                <td><code>5</code></td>
+                <td>Beobachtungsfenster in Minuten.</td>
+              </tr>
+              <tr>
+                <td><code>mute_duration_minutes</code></td>
+                <td><code>60</code></td>
+                <td>Dauer der automatischen Stummschaltung (0 = unbegrenzt).</td>
+              </tr>
+              <tr>
+                <td><code>mute_commands_enabled</code></td>
+                <td><code>true</code></td>
+                <td>Manuelle !mute und !unmute Befehle aktivieren.</td>
+              </tr>
+              <tr>
+                <td><code>global_mute</code></td>
+                <td><code>true</code></td>
+                <td>Globales Stummschalten in allen Räumen des Bots.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Installation -->
+      <section class="content-section" id="installation">
+        <h2 class="section-title">
+          <span class="section-icon">🚀</span>
+          Installation mit Docker
+        </h2>
+
+        <h3 style="font-size: var(--text-lg); margin: var(--space-4) 0 var(--space-2); color: var(--color-fg);">Voraussetzungen</h3>
+        <ul style="margin-bottom: var(--space-4);">
+          <li>Maubot läuft in Docker (Standard-Image: <code>dock.mau.dev/maubot/maubot</code>)</li>
+          <li>Maubot läuft standardmäßig als <strong>UID/GID 1337</strong> im Container</li>
+        </ul>
+
+        <h3 style="font-size: var(--text-lg); margin: var(--space-4) 0 var(--space-2); color: var(--color-fg);">Schritt 1 — Plugin paketieren</h3>
+        <pre><code>cd /pfad/zum/plugin
+zip -r url_filter.mbp \
+    maubot.yaml base-config.yaml main.py \
+    blacklists/custom.txt blacklists/ignore.txt whitelists/custom.txt</code></pre>
+
+        <h3 style="font-size: var(--text-lg); margin: var(--space-4) 0 var(--space-2); color: var(--color-fg);">Schritt 2 — Plugin hochladen</h3>
+        <ol style="padding-left: var(--space-4); margin-bottom: var(--space-4);">
+          <li>Maubot-Dashboard aufrufen: <code>https://dein-server/_matrix/maubot/#/plugins</code></li>
+          <li><strong>"Upload plugin"</strong> klicken und die .mbp-Datei hochladen</li>
+          <li>Neue Instanz erstellen, Bot-Client zuweisen und speichern</li>
+        </ol>
+
+        <h3 style="font-size: var(--text-lg); margin: var(--space-4) 0 var(--space-2); color: var(--color-fg);">Schritt 3 — Verzeichnisstruktur anlegen</h3>
+        <pre><code>mkdir -p ./data/blacklists ./data/whitelists
+touch ./data/blacklists/custom.txt
+touch ./data/whitelists/custom.txt</code></pre>
+
+        <h3 style="font-size: var(--text-lg); margin: var(--space-4) 0 var(--space-2); color: var(--color-fg);">Schritt 4 — Blacklist-Dateien ablegen</h3>
+        <p>Hostfile-formatierte .txt-Dateien in <code>./data/blacklists/</code> ablegen.</p>
+        <p><strong>Geeignete Quellen:</strong></p>
+        <ul style="margin-bottom: var(--space-4);">
+          <li><a href="https://oisd.nl/" target="_blank" rel="noopener">oisd.nl</a> — verschiedene Kategorien</li>
+          <li><a href="https://github.com/StevenBlack/hosts" target="_blank" rel="noopener">StevenBlack/hosts</a> — konsolidierte Listen</li>
+          <li><a href="https://blocklistproject.github.io/Lists/" target="_blank" rel="noopener">The Block List Project</a> — nach Kategorie sortiert</li>
+        </ul>
+
+        <pre><code>./data/blacklists/
+├── malware.txt
+├── phishing.txt
+├── scam.txt
+└── custom.txt      ← vom Bot verwaltet</code></pre>
+
+        <h3 style="font-size: var(--text-lg); margin: var(--space-4) 0 var(--space-2); color: var(--color-fg);">Schritt 5 — Berechtigungen setzen ⚠️</h3>
+        <div class="info-box warning">
+          <span class="info-box-icon">⚠️</span>
+          <div class="info-box-content">
+            <div class="info-box-title">Wichtig</div>
+            <p>Da Maubot im Container als <strong>UID 1337</strong> läuft, müssen die Verzeichnisse diesem Nutzer gehören. Ohne korrekte Berechtigungen kann der Bot nicht in custom.txt schreiben.</p>
+          </div>
+        </div>
+        <pre><code>chown -R 1337:1337 ./data/blacklists ./data/whitelists</code></pre>
+
+        <h3 style="font-size: var(--text-lg); margin: var(--space-4) 0 var(--space-2); color: var(--color-fg);">Schritt 6 — Instanz konfigurieren</h3>
+        <p>Im Maubot-Dashboard mindestens folgende Werte setzen:</p>
+        <pre><code>blacklist_dir: /data/blacklists/
+whitelist_dir: /data/whitelists/
+mod_room_id: "!DEIN_MOD_RAUM_ID:homeserver.example"
+secret_salt: "dein-zufaelliger-salt-hier"</code></pre>
+
+        <h3 style="font-size: var(--text-lg); margin: var(--space-4) 0 var(--space-2); color: var(--color-fg);">Schritt 7 — Bot in Räume einladen</h3>
+        <ol style="padding-left: var(--space-4); margin-bottom: var(--space-4);">
+          <li>Bot in alle zu überwachenden Räume einladen</li>
+          <li>Bot in diesen Räumen auf <strong>Powerlevel 50</strong> (Moderator) setzen</li>
+          <li>Bot in den Moderationsraum einladen und Schreibrechte erteilen</li>
+          <li>Wenn Auto-Mute verwendet wird: Bot auf <strong>Powerlevel 100</strong> (Admin) setzen</li>
+        </ol>
+      </section>
+
+      <!-- Fehlerbehebung -->
+      <section class="content-section" id="troubleshooting">
+        <h2 class="section-title">
+          <span class="section-icon">🔧</span>
+          Fehlerbehebung
+        </h2>
+
+        <div class="faq-list">
+          <div class="faq-item">
+            <dt class="faq-question">Bot schreibt nicht in custom.txt</dt>
+            <dd class="faq-answer">Berechtigungen auf dem Host korrigieren: <code>chown -R 1337:1337 ./data/blacklists ./data/whitelists</code></dd>
+          </div>
+
+          <div class="faq-item">
+            <dt class="faq-question">Bot kann keine Nachrichten löschen</dt>
+            <dd class="faq-answer">Bot im betreffenden Raum auf Powerlevel 50 setzen.</dd>
+          </div>
+
+          <div class="faq-item">
+            <dt class="faq-question">Auto-Mute funktioniert nicht</dt>
+            <dd class="faq-answer">Bot benötigt ein höheres Powerlevel als der Zielnutzer (empfohlen: PL 100).</dd>
+          </div>
+
+          <div class="faq-item">
+            <dt class="faq-question">Bot sendet nicht in den Moderationsraum</dt>
+            <dd class="faq-answer">Prüfen ob der Bot eingeladen wurde und Schreibrechte hat.</dd>
+          </div>
+
+          <div class="faq-item">
+            <dt class="faq-question">Keine .txt-Dateien beim Start gefunden</dt>
+            <dd class="faq-answer">Verzeichnis und Dateien anlegen (Schritt 3), Berechtigungen setzen (Schritt 5).</dd>
+          </div>
+
+          <div class="faq-item">
+            <dt class="faq-question">!botstatus meldet DB-Fehler</dt>
+            <dd class="faq-answer">Sicherstellen, dass <code>database: true</code> und <code>database_type: asyncpg</code> in maubot.yaml gesetzt sind.</dd>
+          </div>
+
+          <div class="faq-item">
+            <dt class="faq-question">Warnung „secret_salt ist nicht gesetzt"</dt>
+            <dd class="faq-answer">Den secret_salt in der Instanzkonfiguration auf einen sicheren Zufallswert setzen.</dd>
+          </div>
+        </div>
+      </section>
+
+      <!-- Paketerstellung -->
+      <section class="content-section" id="deployment">
+        <h2 class="section-title">
+          <span class="section-icon">📦</span>
+          Paketerstellung und Deployment
+        </h2>
+
+        <p>Nach Änderungen an den Quelldateien neu paketieren:</p>
+        <pre><code>zip -r url_filter.mbp \
+    maubot.yaml base-config.yaml main.py \
+    blacklists/custom.txt blacklists/ignore.txt whitelists/custom.txt</code></pre>
+
+        <p style="margin-top: var(--space-3);">Das aktualisierte .mbp im Maubot-Dashboard hochladen und die Instanz neu starten.</p>
+
+        <div class="info-box tip">
+          <span class="info-box-icon">💡</span>
+          <div class="info-box-content">
+            <div class="info-box-title">Listen manuell aktualisieren</div>
+            <p>Neue .txt-Dateien in ./data/blacklists/ ablegen, Berechtigungen prüfen, dann <code>!reloadlists</code> im Moderationsraum eingeben — kein Neustart nötig.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Anforderungen -->
+      <section class="content-section" id="requirements">
+        <h2 class="section-title">
+          <span class="section-icon">📋</span>
+          Anforderungen
+        </h2>
+
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Komponente</th>
+                <th>Mindestversion</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Maubot</td>
+                <td>>= 0.4.0</td>
+              </tr>
+              <tr>
+                <td>mautrix-python</td>
+                <td>>= 0.20.0</td>
+              </tr>
+              <tr>
+                <td>Python</td>
+                <td>>= 3.10</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Keywords -->
+      <section class="content-section">
+        <h3>Keywords</h3>
+        <div class="keyword-list">
+          <span class="keyword">Matrix</span>
+          <span class="keyword">Maubot</span>
+          <span class="keyword">URL filtering</span>
+          <span class="keyword">Blacklist</span>
+          <span class="keyword">Whitelist</span>
+          <span class="keyword">Phishing</span>
+          <span class="keyword">Anti-Spam</span>
+          <span class="keyword">Moderation</span>
+          <span class="keyword">Link-Filter</span>
+          <span class="keyword">Security</span>
+          <span class="keyword">GDPR</span>
+          <span class="keyword">DSGVO</span>
+          <span class="keyword">Auto-Mute</span>
+          <span class="keyword">URL-Shortener</span>
+          <span class="keyword">Wildcard</span>
+          <span class="keyword">Apex-Domain</span>
+        </div>
+      </section>
+
+      <!-- Back Link -->
+      <div style="margin-top: 3rem; padding-top: 2rem; border-top: 1px solid var(--color-border);">
+        <a href="../" style="display: inline-flex; align-items: center; gap: 0.5rem; color: var(--color-link); text-decoration: none; font-weight: 500;">
+          ← Zurück zur Startseite
+        </a>
+      </div>
+
+    </div>
   </main>
-  <footer class="footer">© Morpheus Link Bot</footer>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <p>© 2026 Morpheus Link Bot — <a href="https://github.com/M2tecDev/morpheus-link-bot">GitHub</a></p>
+    </div>
+  </footer>
+
+  <!-- Mobile Menu Script -->
+  <script>
+    document.addEventListener('click', function(e) {
+      const nav = document.querySelector('.lang-switch');
+      const toggle = document.querySelector('.mobile-menu-toggle');
+      if (!nav.contains(e.target) && !toggle.contains(e.target)) {
+        nav.classList.remove('open');
+      }
+    });
+  </script>
 </body>
 </html>

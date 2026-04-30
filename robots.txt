@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://m2tecdev.github.io/morpheus-link-bot/sitemap.xml
+
+Crawl-delay: 1
