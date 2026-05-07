@@ -3,6 +3,14 @@
 Alle wichtigen Änderungen am **morpheus-link-bot** werden hier dokumentiert.
 Das Format orientiert sich an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/) und [Semantic Versioning](https://semver.org/lang/de/).
 
+## [2.6.3] - 2026-05-07
+
+**Bugfixes**
+
+- **Wildcard-Einträge werden jetzt persistent gespeichert** — Domains, die per `!allow *.domain.com` oder `!block *.domain.com` hinzugefügt wurden, gingen nach einem Bot-Neustart verloren, weil sie ausschließlich im RAM gehalten wurden. Ab v2.6.3 werden Wildcard-Einträge wie reguläre Domains in der Datenbank (`domain_rule`-Tabelle) mit dem Präfix `*.` gespeichert. `_load_domain_rules_cache()` und der Reload-Pfad (`_reload_lists()`) erkennen das Präfix beim Laden und routen die Einträge korrekt in die Wildcard-Sets. `!unallow` und `!unblock` löschen Wildcard-Einträge jetzt ebenfalls aus der DB.
+
+---
+
 ## [2.6.2] - 2026-04-29
 
 **Bugfixes**

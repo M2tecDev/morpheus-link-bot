@@ -1,4 +1,4 @@
-# URL-Filter-Bot für Matrix — v2.6.2
+# URL-Filter-Bot für Matrix — v2.6.3
 [![Made for Matrix](https://img.shields.io/badge/Made%20for%20Matrix-000000?logo=matrix&logoColor=white)](https://matrix.org/)
 
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
@@ -12,7 +12,7 @@
 
 Ein Maubot-Plugin, das eingehende Nachrichten in Matrix-Räumen auf URLs scannt und diese gegen konfigurierbare Blacklists und Whitelists prüft. Unbekannte Links werden automatisch zur Moderatorenüberprüfung weitergeleitet. Enthält automatischen Spam-Schutz mit optionalem Stummschalten, eine vollständig datenbankgestützte Persistenz und DSGVO-konforme Datenhaltung.
 
-> **Neu in v2.6.2:** `!urlstatus` verwendet jetzt dieselbe Prioritätsreihenfolge (Exakt > Wildcard > Apex) wie der Haupt-Filter.
+> **Neu in v2.6.3:** Wildcard-Einträge (`*.domain.com`) werden jetzt persistent in der Datenbank gespeichert und überleben Bot-Neustarts.
 
 ---
 
@@ -38,7 +38,7 @@ Ein Maubot-Plugin, das eingehende Nachrichten in Matrix-Räumen auf URLs scannt 
 
 **Moderationsworkflow** — Unbekannte Domains werden automatisch an einen konfigurierten Moderationsraum weitergeleitet. Moderatoren entscheiden dort per Emoji-Reaktion (✅ / ❌) oder Textbefehl. Die Entscheidung wird sofort aktiv und in der Datenbank sowie in der jeweiligen `custom.txt` gespeichert.
 
-**Datenbankgestützte Persistenz** — Alle Runtime-Moderationsentscheidungen (Whitelist, Blacklist, Ignore-Vorschauen) sowie offene Moderationsanfragen werden in Maubots nativer Datenbank gespeichert. Bot-Neustarts sind dadurch vollständig stateful — kein Datenverlust bei Neustarts.
+**Datenbankgestützte Persistenz** — Alle Runtime-Moderationsentscheidungen (Whitelist, Blacklist, Wildcards, Ignore-Vorschauen) sowie offene Moderationsanfragen werden in Maubots nativer Datenbank gespeichert. Bot-Neustarts sind dadurch vollständig stateful — kein Datenverlust bei Neustarts.
 
 **DSGVO / Privacy by Design** — Matrix-Nutzer-IDs werden ausschließlich als `SHA-256(secret_salt:user_id)`-Hash gespeichert, niemals im Klartext. Ein Hintergrund-Retention-Loop löscht Verstoßdaten automatisch nach 24 Stunden. Der `secret_salt` ist ein Pflichtfeld in der Konfiguration.
 

@@ -1,5 +1,5 @@
 """
-URL-Filter-Bot — Hochleistungsedition  (v2.6.2)
+URL-Filter-Bot — Hochleistungsedition  (v2.6.3)
 ============================================
 
 Designziele
@@ -1386,7 +1386,15 @@ class URLFilterBot(Plugin):
                 if _ign_pv:
                     # ignore_preview_set wird separat gesetzt — hier vormerken
                     self.ignore_preview_set.add(_dom)
-                if _is_bl:
+                if _dom.startswith("*."):
+                    _suffix = _dom[2:]
+                    if _is_bl:
+                        new_bl_wc.add(_suffix)
+                        new_wl_wc.discard(_suffix)
+                    else:
+                        new_wl_wc.add(_suffix)
+                        new_bl_wc.discard(_suffix)
+                elif _is_bl:
                     new_bl.add(_dom)
                     new_wl.discard(_dom)
                 else:
@@ -2575,10 +2583,11 @@ class URLFilterBot(Plugin):
             try:
                 if is_wildcard:
                     assert suffix is not None
-                    # Wildcards werden nicht in domain_rule gespeichert (kein PK-konformes Format)
-                    # Sie werden nur in den In-Memory-Sets gehalten (aus Textdateien)
                     self.whitelist_wildcards.add(suffix)
                     self.blacklist_wildcards.discard(suffix)
+                    await self._db_upsert_domain_rule(
+                        domain, is_blacklisted=False, ignore_preview=False
+                    )
                 else:
                     # Fix: In-Memory-Update VOR dem DB-await (verhindert Race-Condition
                     # bei der on_message() zwischen yield-Punkt und whitelist_set.add läuft)
@@ -2644,6 +2653,9 @@ class URLFilterBot(Plugin):
                     assert suffix is not None
                     self.blacklist_wildcards.add(suffix)
                     self.whitelist_wildcards.discard(suffix)
+                    await self._db_upsert_domain_rule(
+                        domain, is_blacklisted=True, ignore_preview=False
+                    )
                 else:
                     await self._db_upsert_domain_rule(
                         domain, is_blacklisted=True, ignore_preview=False
@@ -2754,6 +2766,7 @@ class URLFilterBot(Plugin):
             try:
                 if is_wildcard:
                     self.whitelist_wildcards.discard(suffix)
+                    await self._db_delete_domain_rule(domain)
                 else:
                     await self._db_delete_domain_rule(domain)
                     self.whitelist_set.discard(domain)
@@ -2793,6 +2806,7 @@ class URLFilterBot(Plugin):
             try:
                 if is_wildcard:
                     self.blacklist_wildcards.discard(suffix)
+                    await self._db_delete_domain_rule(domain)
                 else:
                     await self._db_delete_domain_rule(domain)
                     self.blacklist_set.discard(domain)
@@ -3710,7 +3724,15 @@ class URLFilterBot(Plugin):
             }
             if ignore_pv:
                 self.ignore_preview_set.add(domain)
-            if is_bl:
+            if domain.startswith("*."):
+                suffix = domain[2:]
+                if is_bl:
+                    self.blacklist_wildcards.add(suffix)
+                    self.whitelist_wildcards.discard(suffix)
+                else:
+                    self.whitelist_wildcards.add(suffix)
+                    self.blacklist_wildcards.discard(suffix)
+            elif is_bl:
                 self.blacklist_set.add(domain)
                 self.whitelist_set.discard(domain)
             else:
