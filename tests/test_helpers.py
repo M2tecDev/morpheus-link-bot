@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from main import (  # noqa: E402
     URLFilterBot,
     _format_age,
+    _is_onion_host,
     _split_domain_args,
     _valid_domain,
 )
@@ -73,6 +74,29 @@ class TestValidDomain:
 
     def test_skip_loopback(self):
         assert _valid_domain("127.0.0.1") is False
+
+    def test_rejects_matrix_user_id(self):
+        assert _valid_domain("@spammer:matrix.org") is False
+
+    def test_rejects_matrix_user_id_wildcard(self):
+        assert _valid_domain("*.@spammer:matrix.org") is False
+
+    def test_rejects_host_colon_port(self):
+        assert _valid_domain("user:matrix.org") is False
+        assert _valid_domain("spammer:matrix.org") is False
+
+    def test_rejects_host_colon_port_wildcard(self):
+        assert _valid_domain("*.user:matrix.org") is False
+
+    def test_rejects_full_url(self):
+        assert _valid_domain("https://evil.com") is False
+        assert _valid_domain("http://evil.com") is False
+
+    def test_rejects_url_with_subdomain(self):
+        assert _valid_domain("https://sub.evil.com") is False
+
+    def test_rejects_url_with_port(self):
+        assert _valid_domain("https://evil.com:8080") is False
 
 
 # ---------------------------------------------------------------------------
@@ -160,3 +184,69 @@ class TestUrlNormalization:
 
     def test_full_url_facebook(self):
         assert _normalize("https://www.facebook.com/") == "www.facebook.com"
+
+
+# ---------------------------------------------------------------------------
+# _is_onion_host
+# ---------------------------------------------------------------------------
+
+
+class TestIsOnionHost:
+    def test_simple_onion(self):
+        assert _is_onion_host("abc.onion") is True
+
+    def test_long_v3_onion(self):
+        assert (
+            _is_onion_host(
+                "duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion"
+            )
+            is True
+        )
+
+    def test_uppercase_onion(self):
+        assert _is_onion_host("EXAMPLE.ONION") is True
+
+    def test_with_subdomain(self):
+        assert _is_onion_host("sub.abc.onion") is True
+
+    def test_trailing_dot(self):
+        assert _is_onion_host("abc.onion.") is True
+
+    def test_clearnet_com(self):
+        assert _is_onion_host("example.com") is False
+
+    def test_bare_onion(self):
+        # nur das Suffix selbst zählt nicht
+        assert _is_onion_host("onion") is False
+        assert _is_onion_host(".onion") is False
+
+    def test_empty(self):
+        assert _is_onion_host("") is False
+
+    def test_onion_in_middle(self):
+        assert _is_onion_host("onion.com") is False
+
+
+# ---------------------------------------------------------------------------
+# URLFilterBot._extract_domains — .onion-Erkennung
+# ---------------------------------------------------------------------------
+
+
+class TestExtractDomainsOnion:
+    def test_naked_onion(self):
+        domains = URLFilterBot._extract_domains("Check this abc123xyz.onion link")
+        assert any(d.endswith(".onion") for d in domains)
+
+    def test_http_onion(self):
+        domains = URLFilterBot._extract_domains("Visit http://abc123xyz.onion/path")
+        assert any(d.endswith(".onion") for d in domains)
+
+    def test_href_onion(self):
+        formatted = '<a href="http://abc123xyz.onion">Mirror</a>'
+        domains = URLFilterBot._extract_domains("Mirror link", formatted)
+        assert any(d.endswith(".onion") for d in domains)
+
+    def test_no_onion_does_not_break_normal_extraction(self):
+        domains = URLFilterBot._extract_domains("Visit https://example.com today")
+        assert "example.com" in domains
+        assert not any(d.endswith(".onion") for d in domains)

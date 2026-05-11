@@ -1,4 +1,4 @@
-# URL-Filter-Bot für Matrix — v2.6.3
+# URL-Filter-Bot für Matrix — v2.7.0
 [![Made for Matrix](https://img.shields.io/badge/Made%20for%20Matrix-000000?logo=matrix&logoColor=white)](https://matrix.org/)
 
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
@@ -12,7 +12,7 @@
 
 Ein Maubot-Plugin, das eingehende Nachrichten in Matrix-Räumen auf URLs scannt und diese gegen konfigurierbare Blacklists und Whitelists prüft. Unbekannte Links werden automatisch zur Moderatorenüberprüfung weitergeleitet. Enthält automatischen Spam-Schutz mit optionalem Stummschalten, eine vollständig datenbankgestützte Persistenz und DSGVO-konforme Datenhaltung.
 
-> **Neu in v2.6.3:** Wildcard-Einträge (`*.domain.com`) werden jetzt persistent in der Datenbank gespeichert und überleben Bot-Neustarts.
+> **Neu in v2.7.0:** `.onion`-Adressen (Tor Hidden Services) werden automatisch blockiert, Google Safe Browsing v5 prüft unbekannte Domains (Privacy-Preserving Hash Lookup), und `!block` / `!allow` lehnen Matrix-Nutzer-/Raum-IDs ab.
 
 ---
 
@@ -34,7 +34,7 @@ Ein Maubot-Plugin, das eingehende Nachrichten in Matrix-Räumen auf URLs scannt 
 
 **Automatische URL-Filterung** — Der Bot überwacht alle Textnachrichten in überwachten Räumen. Enthält eine Nachricht eine URL oder Domain, prüft er diese sofort gegen Blacklist und Whitelist.
 
-**Drei-Wege-Routing** — Jede erkannte Domain landet in einer von drei Kategorien: Whitelist (erlaubt), Blacklist (gesperrt) oder Unbekannt (zur Überprüfung). Die Spezifität bestimmt die Priorität: Exakte Treffer > Wildcard-Treffer > Apex-Treffer. Bei gleicher Spezifität hat Whitelist Vorrang vor Blacklist.
+**Routing** — Jede erkannte Domain landet in einer von vier Kategorien: `.onion` (immer gesperrt, vor allen anderen Prüfungen), Whitelist (erlaubt), Blacklist (gesperrt) oder Unbekannt (zur Überprüfung). Innerhalb von Whitelist/Blacklist bestimmt die Spezifität die Priorität: Exakte Treffer > Wildcard-Treffer > Apex-Treffer. Bei gleicher Spezifität hat Whitelist Vorrang vor Blacklist.
 
 **Moderationsworkflow** — Unbekannte Domains werden automatisch an einen konfigurierten Moderationsraum weitergeleitet. Moderatoren entscheiden dort per Emoji-Reaktion (✅ / ❌) oder Textbefehl. Die Entscheidung wird sofort aktiv und in der Datenbank sowie in der jeweiligen `custom.txt` gespeichert.
 
@@ -50,9 +50,13 @@ Ein Maubot-Plugin, das eingehende Nachrichten in Matrix-Räumen auf URLs scannt 
 
 **URL-Shortener-Auflösung** — Bekannte Kurzlink-Dienste (bit.ly, t.co, tinyurl.com u.a.) werden via HEAD-Request aufgelöst. Die finale Ziel-Domain wird geprüft statt des Shortener-Hosts selbst. Ist der Shortener-Host selbst bereits gesperrt, entfällt der Netzwerkzugriff vollständig.
 
+**Automatischer Block für `.onion`-Adressen** — Tor-Hidden-Service-Links (`*.onion`) werden grundsätzlich blockiert, unabhängig von Whitelist und Blacklist. Erkannt werden sie in `<a href>`-Links, vollständigen URLs (`http://abc.onion`) und nackten Domain-Erwähnungen (`abc.onion`) gleichermaßen. Mod-Review, Safe-Browsing-Check und Linkvorschau entfallen — eine Reputationsprüfung von Hidden Services aus dem Clearnet ist nicht möglich.
+
 **Spam-Schutz & Auto-Mute** — Ein konfigurierbarer Warn-Cooldown verhindert Notification Flooding: Nachrichten werden immer sofort gelöscht, aber eine öffentliche Warnmeldung wird pro Nutzer nur einmal innerhalb des Cooldown-Intervalls gepostet. Optional können Nutzer bei Erreichen eines konfigurierbaren Verstoß-Schwellenwerts innerhalb des Beobachtungsfensters automatisch stummgeschaltet (Powerlevel -1) werden. Verstöße werden datenbankgestützt mit Sliding-Window-Logik gezählt.
 
 **Linkvorschauen** — Für freigegebene URLs kann der Bot optional Open-Graph-Metadaten abrufen und eine kurze Vorschau (Titel + Beschreibung) im Raum posten.
+
+**URL-Sicherheitscheck (Google Safe Browsing v5)** — Optionaler Privacy-Preserving Hash Lookup für unbekannte Domains. Der Bot sendet nur einen 4-Byte SHA-256-Präfix an Google — nie die echte Domain. Das Ergebnis (✅ sauber / ⚠️ GEFÄHRLICH / 🟡 verdächtig) erscheint direkt im Moderations-Alert und gibt Moderatoren sofortigen Kontext.
 
 **Event-ID-Deduplizierung** — Ein interner LRU-Cache (1.000 Einträge) verhindert Doppelverarbeitung bei Matrix-Sync-Replays nach Bot-Neustarts oder Netzwerkproblemen.
 
@@ -75,9 +79,9 @@ Ein Nutzer gilt als Moderator, wenn sein Powerlevel im Moderationsraum mindesten
 
 | Befehl | Beschreibung |
 |--------|-------------|
-| `!allow <domain>` | Domain sofort whitelisten. Unterstützt Wildcards: `!allow *.vertrauenswuerdig.de` — löst automatisch alle zugehörigen offenen Überprüfungen auf. |
+| `!allow <domain>` | Domain sofort whitelisten. Unterstützt Wildcards: `!allow *.vertrauenswuerdig.de` — löst automatisch alle zugehörigen offenen Überprüfungen auf. Matrix-Nutzer-/Raum-IDs (`@user:server`, `!room:server`, `#alias:server`) werden mit einer expliziten Fehlermeldung abgelehnt. |
 | `!unallow <domain>` | Domain oder Wildcard-Eintrag aus der Whitelist entfernen (nur aus `custom.txt` und DB). |
-| `!block <domain>` | Domain sofort blacklisten. Unterstützt Wildcards: `!block *.boese-seite.com` |
+| `!block <domain>` | Domain sofort blacklisten. Unterstützt Wildcards: `!block *.boese-seite.com`. Matrix-Nutzer-/Raum-IDs werden abgelehnt — `!block @opfer:home.tld` würde sonst den gesamten Homeserver sperren. |
 | `!unblock <domain>` | Domain oder Wildcard-Eintrag aus der Blacklist entfernen (nur aus `custom.txt` und DB). |
 | `!reloadlists` | Alle `.txt`-Dateien neu einlesen — kein Neustart nötig. Nützlich nach manuellen Änderungen. |
 | `!pending` | Zeigt alle Domains, die aktuell auf eine Moderationsentscheidung warten — mit menschenlesbaren Zeitangaben (z.B. „10 Minuten", „2 Stunden"). |
@@ -108,7 +112,7 @@ Der Bot verwendet vier Stufen, die nacheinander auf jede Nachricht angewendet we
 
 **Stufe 2 — Klassische URLs:** Explizite URLs mit `http://`, `https://` oder `www.`-Präfix werden per Regex erkannt.
 
-**Stufe 3 — Nackte Domains:** Domains ohne Protokoll wie `example.com` werden erkannt, sofern ihre TLD (z.B. `.com`, `.de`, `.io`) zu einem bekannten Satz von ~230 gültigen Top-Level-Domains gehört. Das verhindert Falschpositive: `hallo.du` wird ignoriert (`.du` ist keine TLD), `banned.com` wird korrekt erkannt. E-Mail-Adressen wie `user@example.com` werden dabei nicht als Domain ausgewertet. Bekannte Missbrauchs-gTLDs wie `.zip`, `.mov` und `.phd` sind ebenfalls enthalten.
+**Stufe 3 — Nackte Domains:** Domains ohne Protokoll wie `example.com` werden erkannt, sofern ihre TLD (z.B. `.com`, `.de`, `.io`) zu einem bekannten Satz von ~230 gültigen Top-Level-Domains gehört. Das verhindert Falschpositive: `hallo.du` wird ignoriert (`.du` ist keine TLD), `banned.com` wird korrekt erkannt. E-Mail-Adressen wie `user@example.com` werden dabei nicht als Domain ausgewertet. Bekannte Missbrauchs-gTLDs wie `.zip`, `.mov` und `.phd` sind ebenfalls enthalten. `.onion` ist zusätzlich freigeschaltet — Tor-Hidden-Service-Adressen werden nicht von der TLD-Schranke verworfen, sondern erkannt und anschließend automatisch geblockt.
 
 **Unicode-Normalisierung:** Alle extrahierten Domains werden vor dem Listen-Vergleich normalisiert — Vollbreite-Zeichen (`ｇｏｏｇｌｅ.com` → `google.com`) sowie Unicode-Domains werden per IDNA in ihre Punycode-Form umgewandelt, sodass Blacklist-Einträge in beiden Schreibweisen greifen.
 
@@ -178,6 +182,14 @@ Diese Optionen werden in `base-config.yaml` definiert und können pro Instanz im
 | `mute_duration_minutes` | `60` | Dauer der automatischen Stummschaltung (Minuten). `0` = unbegrenzt. Ein Hintergrund-Task hebt die Stummschaltung nach Ablauf automatisch auf. |
 | `mute_commands_enabled` | `true` | Manuelle `!mute`- und `!unmute`-Befehle aktivieren. Auf `false` setzen, wenn mehrere Moderations-Bots gleichzeitig im Raum aktiv sind. Betrifft **nicht** das automatische Stummschalten. |
 | `global_mute` | `true` | Globales Stummschalten. Wenn `true`, wird ein Nutzer bei einem Verstoß oder einem `!mute`-Befehl in **allen** Räumen stummgeschaltet, in denen der Bot ein höheres Powerlevel als der Zielnutzer hat. |
+
+### URL-Sicherheitscheck (GSB v5)
+
+| Parameter | Standard | Beschreibung |
+|-----------|----------|-------------|
+| `url_safety_check.enabled` | `false` | Google Safe Browsing v5-Check aktivieren. Nur unbekannte Domains werden geprüft — whitelisted und blacklisted URLs kommen nie an die API. |
+| `url_safety_check.api_key` | `""` | API-Key für die Safe Browsing API. Kostenloses Limit: 10.000 Requests/Tag. [Key erstellen](https://console.cloud.google.com/apis/library/safebrowsing.googleapis.com) |
+| `url_safety_check.timeout` | `3` | HTTP-Timeout in Sekunden für den GSB-Request. Bei Timeout oder Fehler wird der Review-Alarm trotzdem gesendet (mit Fehler-Hinweis). |
 
 ### Leistungsoptimierung
 

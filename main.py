@@ -1,5 +1,5 @@
 """
-URL-Filter-Bot — Hochleistungsedition  (v2.6.3)
+URL-Filter-Bot — Hochleistungsedition  (v2.7.0)
 ============================================
 
 Designziele
@@ -41,6 +41,7 @@ from __future__ import annotations
 # ===========================================================================
 
 import asyncio
+import base64
 import concurrent.futures
 import datetime
 import hashlib
@@ -58,6 +59,7 @@ from urllib.parse import unquote, urlparse
 # ===========================================================================
 
 import aiohttp
+
 
 # ===========================================================================
 # ABSCHNITT 3 — MAUBOT / MAUTRIX IMPORTE
@@ -697,6 +699,22 @@ _URL_SHORTENERS: frozenset = frozenset(
 )
 
 # ---------------------------------------------------------------------------
+# TOR-HIDDEN-SERVICES (.onion)
+# ---------------------------------------------------------------------------
+# .onion-Adressen (RFC 7686) werden grundsätzlich auto-geblockt. Sie verweisen
+# auf Tor Hidden Services und können weder von Google Safe Browsing noch von
+# normalen Reputationsdiensten geprüft werden. Ein Linkpreview ist ebenfalls
+# unmöglich (kein Routing über Clearnet).
+_ONION_SUFFIX: str = ".onion"
+
+
+def _is_onion_host(host: str) -> bool:
+    """True wenn der Host eine .onion-Adresse ist (mit mindestens einem Label davor)."""
+    h = host.lower().strip().rstrip(".")
+    return h.endswith(_ONION_SUFFIX) and len(h) > len(_ONION_SUFFIX)
+
+
+# ---------------------------------------------------------------------------
 # HREF-REGEX — Extrahiert Ziel-URLs aus HTML-<a>-Tags im formatted_body
 # ---------------------------------------------------------------------------
 # Matrix-Clients (z.B. Element) senden bei formatierten Nachrichten ein
@@ -874,6 +892,7 @@ class Config(BaseProxyConfig):
         helper.copy("mute_commands_enabled")  # Fix #18
         helper.copy("global_mute")
         helper.copy("secret_salt")  # DSGVO: Salt für SHA-256-Nutzer-Hashing
+        helper.copy("url_safety_check")
 
 
 # ===========================================================================
@@ -905,6 +924,15 @@ class LoadResult:
     domains_accepted: int
     wildcards_found: int
     elapsed_ms: float
+
+
+@dataclass
+class SafetyResult:
+    """Ergebnis eines Google Safe Browsing v5 Hash-Lookups."""
+
+    verdict: str  # "malicious" | "suspicious" | "safe" | "error" | "disabled"
+    threat_type: str  # z.B. "SOCIAL_ENGINEERING", "MALWARE", "" wenn safe
+    detail: str = ""  # Freitext für Logs/Debug
 
 
 # ===========================================================================
@@ -939,6 +967,13 @@ class URLFilterBot(Plugin):
     """
 
     _SEEN_EVENTS_MAX: int = 1_000
+
+    # Klassen-weiter Fallback-Cache: fängt Duplikate ab, wenn Maubot den
+    # Handler versehentlich mehrfach registriert (z.B. bei Hot-Reloads).
+    _global_seen_event_ids: Set[str] = set()
+    _global_seen_event_ids_q: Deque[str] = deque()
+    _global_seen_lock = asyncio.Lock()
+    _GLOBAL_SEEN_MAX: int = 5_000
 
     # Override base-class optionals — always set before any handler runs
     config: Config
@@ -1076,6 +1111,11 @@ class URLFilterBot(Plugin):
                 "Plugin-Start abgebrochen. Bitte in der Maubot-Instanzkonfiguration "
                 "einen individuellen secret_salt eintragen."
             )
+
+        # ── GSB-Konfigurationsvalidierung ─────────────────────────────────────
+        # Wenn url_safety_check aktiviert ist, wird ein Test-Request ausgeführt.
+        # Bei ungültigem Key oder nicht erreichbarer API bricht der Start ab.
+        await self._validate_gsb_config()
 
         # ── Datenbank: DomainRule-Cache + offene Reviews wiederherstellen ─────
         # Läuft NACH dem Textdatei-Laden, damit DB-Einträge Datei-Einträge
@@ -1532,7 +1572,9 @@ class URLFilterBot(Plugin):
             last_dot = candidate.rfind(".")
             tld = candidate[last_dot + 1 :]
             domain_part = candidate[:last_dot]
-            if not tld.isalpha() or tld not in _COMMON_TLDS or not domain_part:
+            if not tld.isalpha() or not domain_part:
+                continue
+            if tld not in _COMMON_TLDS and tld != "onion":
                 continue
             final = candidate[4:] if candidate.startswith("www.") else candidate
             if final and "." in final:
@@ -1624,6 +1666,21 @@ class URLFilterBot(Plugin):
         event_id = evt.event_id
         if event_id in self._seen_events:
             return
+
+        # Sekundärer klassen-weiter Fallback-Cache (Schutz bei mehrfach
+        # registrierten Handlern nach Hot-Reloads).
+        async with URLFilterBot._global_seen_lock:
+            if event_id in URLFilterBot._global_seen_event_ids:
+                return
+            URLFilterBot._global_seen_event_ids.add(event_id)
+            URLFilterBot._global_seen_event_ids_q.append(event_id)
+            if (
+                len(URLFilterBot._global_seen_event_ids_q)
+                > URLFilterBot._GLOBAL_SEEN_MAX
+            ):
+                _evicted_global = URLFilterBot._global_seen_event_ids_q.popleft()
+                URLFilterBot._global_seen_event_ids.discard(_evicted_global)
+
         self._seen_events.add(event_id)
         self._seen_events_q.append(event_id)
         if len(self._seen_events_q) > self._SEEN_EVENTS_MAX:
@@ -1771,11 +1828,17 @@ class URLFilterBot(Plugin):
                             "🔗 Shortener aufgelöst: %s → %s", s_domain, final
                         )
 
+        onion: List[str] = []
         blacklisted: List[str] = []
         unknown: List[str] = []
         whitelisted: List[str] = []
 
         for domain in domains:
+            # .onion-Adressen werden vor jeder Whitelist/Blacklist-Logik abgefangen
+            # — Tor-Hidden-Services sind grundsätzlich nicht erlaubt.
+            if _is_onion_host(domain):
+                onion.append(domain)
+                continue
             # Priorität: Exakt > Wildcard > Apex — bei gleicher Spezifität gilt:
             # Whitelist hat Vorrang vor Blacklist.
             # Das stellt sicher, dass ein exakter Blacklist-Eintrag (sub.example.com)
@@ -1808,6 +1871,9 @@ class URLFilterBot(Plugin):
 
         message_redacted = False
 
+        if onion:
+            await self._handle_onion(onion, evt)
+            return
         if blacklisted:
             await self._handle_blacklisted(blacklisted, evt)
             return
@@ -1926,6 +1992,42 @@ class URLFilterBot(Plugin):
         await self._handle_violation(evt.sender, evt.room_id)
         return redacted
 
+    async def _handle_onion(self, domains: List[str], evt: MessageEvent) -> bool:
+        """
+        Auto-Block für Tor-Hidden-Service-Adressen (*.onion).
+
+        .onion-Hosts können weder durch GSB noch durch Linkvorschauen
+        sinnvoll geprüft werden — sie laufen ausschließlich über Tor und sind
+        daher in diesem Bot grundsätzlich gesperrt.
+        """
+        self.log.info(
+            "🧅 .onion-Link blockiert: %s in %s von %s",
+            domains,
+            evt.room_id,
+            evt.sender,
+        )
+        redacted = await self._redact(
+            evt.room_id,
+            evt.event_id,
+            reason=f".onion-Link nicht erlaubt: {', '.join(domains[:3])}",
+        )
+        now = time.monotonic()
+        cooldown = float(self.config.get("warn_cooldown", 60))
+        if now - self._warn_cooldowns.get(evt.sender, 0.0) >= cooldown:
+            self._warn_cooldowns[evt.sender] = now
+            await self._send_notice(
+                evt.room_id,
+                f"🧅 {evt.sender}: Deine Nachricht wurde entfernt — "
+                f".onion-Adressen (Tor Hidden Services) sind in diesem Raum nicht erlaubt.",
+            )
+        for _d in domains:
+            try:
+                await self._db_increment_domain_stats(_d)
+            except Exception as _exc:
+                self.log.debug("DomainStats-Inkrementierung fehlgeschlagen: %s", _exc)
+        await self._handle_violation(evt.sender, evt.room_id)
+        return redacted
+
     async def _handle_unknown(self, domains: List[str], evt: MessageEvent) -> bool:
         self.log.info(
             "🔍 Unbekannte Domain: %s in %s von %s", domains, evt.room_id, evt.sender
@@ -1948,7 +2050,8 @@ class URLFilterBot(Plugin):
         _body: str = evt.content.body or ""
         _fmt: Optional[str] = getattr(evt.content, "formatted_body", None) or None
         for domain in domains:
-            await self._submit_for_review(domain, evt)
+            safety = await self._check_url_safety(domain)
+            await self._submit_for_review(domain, evt, safety=safety)
         await self._handle_violation(evt.sender, evt.room_id)
         return redacted
 
@@ -2323,7 +2426,9 @@ class URLFilterBot(Plugin):
     # ABSCHNITT 12 — MODERATIONSRAUM: PRÜFANFRAGE EINREICHEN
     # ===========================================================================
 
-    async def _submit_for_review(self, domain: str, evt: MessageEvent) -> None:
+    async def _submit_for_review(
+        self, domain: str, evt: MessageEvent, safety: Optional[SafetyResult] = None
+    ) -> None:
         mod_room = RoomID(self.config.get("mod_room_id", ""))
         if not mod_room:
             self.log.warning(
@@ -2338,11 +2443,24 @@ class URLFilterBot(Plugin):
             )
             return
 
+        # Safety-Label zusammensetzen
+        safety_line = ""
+        if safety and safety.verdict != "disabled":
+            if safety.verdict == "malicious":
+                safety_line = f"\n**GSB-Check:** ⚠️ GEFÄHRLICH (`{safety.threat_type}`)"
+            elif safety.verdict == "suspicious":
+                safety_line = f"\n**GSB-Check:** 🟡 verdächtig (`{safety.threat_type}`)"
+            elif safety.verdict == "safe":
+                safety_line = "\n**GSB-Check:** ✅ sauber"
+            elif safety.verdict == "error":
+                safety_line = f"\n**GSB-Check:** ❓ Fehler (`{safety.detail}`)"
+
         alert_text = (
             f"🔔 **URL-Überprüfung erforderlich**\n\n"
             f"**Absender:** {evt.sender}\n"
             f"**Raum:** `{evt.room_id}`\n"
-            f"**Domain:** `{domain}`\n\n"
+            f"**Domain:** `{domain}`"
+            f"{safety_line}\n\n"
             f"Reagiere mit {_EMOJI_ALLOW} zum **Whitelisten** oder {_EMOJI_BLOCK} zum **Blacklisten**.\n"
             f"Oder verwende: `!allow {domain}` / `!block {domain}`"
         )
@@ -2569,6 +2687,16 @@ class URLFilterBot(Plugin):
         results: List[str] = []
 
         for domain in domain_list:
+            # Schutz: keine Matrix-Nutzer/Raum/Alias-IDs als „Domain" akzeptieren —
+            # sonst würde !allow @user:home.tld den Homeserver des Nutzers eintragen.
+            if domain.startswith(("@", "!", "#", "$")) or _looks_like_matrix_identifier(
+                domain
+            ):
+                results.append(
+                    f"❌ `{domain}` — Matrix-Nutzer/Raum-IDs können nicht whitelistet "
+                    f"werden. Bitte nur Domains angeben."
+                )
+                continue
             if not _valid_domain(domain):
                 results.append(f"❌ `{domain}` — ungültige Domain")
                 continue
@@ -2637,6 +2765,16 @@ class URLFilterBot(Plugin):
         results: List[str] = []
 
         for domain in domain_list:
+            # Schutz: keine Matrix-Nutzer/Raum/Alias-IDs als „Domain" akzeptieren —
+            # sonst würde !block @opfer:home.tld den ganzen Homeserver sperren.
+            if domain.startswith(("@", "!", "#", "$")) or _looks_like_matrix_identifier(
+                domain
+            ):
+                results.append(
+                    f"❌ `{domain}` — Matrix-Nutzer/Raum-IDs können nicht gesperrt "
+                    f"werden. Bitte nur Domains angeben."
+                )
+                continue
             if not _valid_domain(domain):
                 results.append(f"❌ `{domain}` — ungültige Domain")
                 continue
@@ -2840,6 +2978,10 @@ class URLFilterBot(Plugin):
         for domain in domain_list:
             if not _valid_domain(domain):
                 results.append(f"❌ `{domain}` — ungültige Domain")
+            elif _is_onion_host(domain):
+                results.append(
+                    f"🧅 `{domain}` ist ein **Tor Hidden Service** — wird immer blockiert"
+                )
             elif domain in self.whitelist_set:
                 ignored = (
                     " · 🔇 Vorschau ignoriert"
@@ -3258,7 +3400,7 @@ class URLFilterBot(Plugin):
             return
 
         help_text = (
-            "🤖 **URL-Filter-Bot — Befehlsübersicht (v2.6.0)**\n\n"
+            "🤖 **URL-Filter-Bot — Befehlsübersicht (v2.7.0)**\n\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             "🔓 **Öffentliche Befehle**\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -3515,6 +3657,148 @@ class URLFilterBot(Plugin):
         if not title and not desc:
             return None
         return {"title": (title or "").strip(), "description": (desc or "").strip()}
+
+    async def _validate_gsb_config(self) -> None:
+        """
+        Prüft beim Bot-Start, ob die GSB-Konfiguration funktioniert.
+        Wird nur ausgeführt wenn url_safety_check.enabled == true.
+        Wirft ValueError bei ungültigem/fehlendem API-Key oder nicht erreichbarer API.
+        """
+        cfg = self.config.get("url_safety_check", {})
+        if not cfg.get("enabled", False):
+            return
+
+        api_key = cfg.get("api_key", "").strip()
+        if not api_key:
+            self.log.critical(
+                "🚨 PLUGIN NICHT GESTARTET: url_safety_check.enabled ist true, aber "
+                "kein api_key konfiguriert. Bitte einen gültigen GSB-API-Key in der "
+                "Maubot-Instanzkonfiguration eintragen oder url_safety_check.enabled "
+                "auf false setzen."
+            )
+            raise ValueError(
+                "url_safety_check ist aktiviert, aber api_key fehlt. "
+                "Plugin-Start abgebrochen."
+            )
+
+        # Test-Request mit harmloser Domain (example.com) — reiner Konnektivitäts-Check
+        url_expr = "https://example.com/"
+        digest = hashlib.sha256(url_expr.encode()).digest()
+        prefix_b64 = base64.b64encode(digest[:4]).decode()
+        endpoint = "https://safebrowsing.googleapis.com/v5/hashes:search"
+        params = {"key": api_key, "hashPrefixes": prefix_b64}
+        timeout = float(cfg.get("timeout", 3))
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    endpoint,
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=timeout),
+                ) as resp:
+                    if resp.status != 200:
+                        body = await resp.text()
+                        self.log.critical(
+                            "🚨 PLUGIN NICHT GESTARTET: GSB-API-Test fehlgeschlagen "
+                            "(HTTP %s). Der API-Key ist möglicherweise ungültig oder die "
+                            "Safe Browsing API ist nicht aktiviert. Antwort: %s",
+                            resp.status,
+                            body[:200],
+                        )
+                        raise ValueError(
+                            f"GSB-API-Test fehlgeschlagen (HTTP {resp.status}). "
+                            "Der API-Key ist ungültig oder die API ist nicht erreichbar. "
+                            "Setze url_safety_check.enabled auf false oder trage einen "
+                            "gültigen API-Key ein."
+                        )
+                    # Body lesen (Protobuf) — Status 200 reicht für Konnektivitäts-Validierung
+                    await resp.read()
+        except asyncio.TimeoutError:
+            self.log.critical(
+                "🚨 PLUGIN NICHT GESTARTET: GSB-API-Test hat Zeitlimit überschritten."
+            )
+            raise ValueError(
+                "GSB-API-Test Timeout. Plugin-Start abgebrochen."
+            ) from None
+        except ValueError:
+            raise
+        except Exception as exc:
+            self.log.critical(
+                "🚨 PLUGIN NICHT GESTARTET: GSB-API-Test fehlgeschlagen: %s", exc
+            )
+            raise ValueError(
+                f"GSB-API-Test fehlgeschlagen: {exc}. Plugin-Start abgebrochen."
+            ) from exc
+
+    async def _check_url_safety(self, domain: str) -> SafetyResult:
+        """
+        Google Safe Browsing v5 Hash-Lookup (Privacy-Preserving).
+        Es wird nur ein 4-Byte SHA-256-Präfix übertragen — Google sieht nie
+        die tatsächliche Domain.
+        """
+        cfg = self.config.get("url_safety_check", {})
+        if not cfg.get("enabled", False):
+            return SafetyResult(verdict="disabled", threat_type="")
+
+        api_key = cfg.get("api_key", "").strip()
+        if not api_key:
+            self.log.warning("url_safety_check.api_key fehlt — Check übersprungen.")
+            return SafetyResult(verdict="error", threat_type="", detail="kein API-Key")
+
+        # 1. URL kanonisieren und SHA-256 berechnen
+        url_expr = f"https://{domain}/"
+        digest = hashlib.sha256(url_expr.encode()).digest()  # 32 Bytes
+        prefix = digest[:4]  # 4-Byte-Präfix
+        prefix_b64 = base64.b64encode(prefix).decode()
+
+        # 2. Anfrage an GSB v5 (GET mit Query-Parametern, Antwort kommt als Protobuf)
+        endpoint = "https://safebrowsing.googleapis.com/v5/hashes:search"
+        params = {"key": api_key, "hashPrefixes": prefix_b64}
+        timeout = float(cfg.get("timeout", 3))
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    endpoint,
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=timeout),
+                ) as resp:
+                    if resp.status != 200:
+                        return SafetyResult(
+                            verdict="error",
+                            threat_type="",
+                            detail=f"HTTP {resp.status}",
+                        )
+                    body = await resp.read()
+        except asyncio.TimeoutError:
+            return SafetyResult(verdict="error", threat_type="", detail="Timeout")
+        except Exception as exc:
+            return SafetyResult(verdict="error", threat_type="", detail=str(exc))
+
+        # 3. Protobuf-Antwort parsen (pure Stdlib, kein externes Modul)
+        try:
+            full_hashes = _pb_parse_search_hashes_response(body)
+        except Exception as exc:
+            return SafetyResult(
+                verdict="error", threat_type="", detail=f"Protobuf-Fehler: {exc}"
+            )
+
+        # 4. Full-Hash lokal vergleichen — Privacy: Google sah nie den vollen Hash
+        for full_hash, threat_type_int in full_hashes:
+            if full_hash == digest:
+                threat_name = _GSB_THREAT_TYPES.get(threat_type_int, "UNKNOWN")
+                if threat_name in (
+                    "MALWARE",
+                    "SOCIAL_ENGINEERING",
+                    "UNWANTED_SOFTWARE",
+                    "POTENTIALLY_HARMFUL_APPLICATION",
+                ):
+                    verdict = "malicious"
+                else:
+                    verdict = "suspicious"
+                return SafetyResult(verdict=verdict, threat_type=threat_name)
+
+        return SafetyResult(verdict="safe", threat_type="")
 
     # ===========================================================================
     # ABSCHNITT 18 — MATRIX-NACHRICHTENDIENSTPROGRAMME
@@ -3966,6 +4250,122 @@ class URLFilterBot(Plugin):
 # ===========================================================================
 
 
+# ---------------------------------------------------------------------------
+# GOOGLE SAFE BROWSING v5 — Minimaler Protobuf-Parser (pure Stdlib)
+# ---------------------------------------------------------------------------
+# Die GSB v5 REST-API liefert ihre Antworten ausschließlich als Protobuf-Binary
+# (application/x-protobuf). Da Maubot-Plugins keine externen Pakete bündeln
+# können, parsen wir das Wire-Format manuell. Wir benötigen nur 3 Message-Typen:
+#
+#   message SearchHashesResponse { repeated FullHash full_hashes = 1; ... }
+#   message FullHash { bytes full_hash = 1; repeated FullHashDetail full_hash_details = 2; }
+#   message FullHashDetail { ThreatType threat_type = 1; ... }
+#
+# Wire-Format: jedes Feld beginnt mit einem Varint-Tag = (field_num << 3) | wire_type.
+# Wire-Typen: 0=Varint, 1=64-bit, 2=Length-delimited, 5=32-bit.
+# ---------------------------------------------------------------------------
+
+_GSB_THREAT_TYPES: Dict[int, str] = {
+    0: "THREAT_TYPE_UNSPECIFIED",
+    1: "MALWARE",
+    2: "SOCIAL_ENGINEERING",
+    3: "UNWANTED_SOFTWARE",
+    4: "POTENTIALLY_HARMFUL_APPLICATION",
+}
+
+
+def _pb_read_varint(buf: bytes, pos: int) -> Tuple[int, int]:
+    """Liest einen Protobuf-Varint. Gibt (Wert, neue_Position) zurück."""
+    result = 0
+    shift = 0
+    while pos < len(buf):
+        b = buf[pos]
+        pos += 1
+        result |= (b & 0x7F) << shift
+        if not (b & 0x80):
+            return result, pos
+        shift += 7
+        if shift > 63:
+            raise ValueError("Varint zu lang")
+    raise ValueError("Abgeschnittener Varint")
+
+
+def _pb_skip_field(buf: bytes, pos: int, wire_type: int) -> int:
+    """Überspringt ein Feld eines unbekannten Typs. Gibt die neue Position zurück."""
+    if wire_type == 0:  # Varint
+        _, pos = _pb_read_varint(buf, pos)
+    elif wire_type == 2:  # Length-delimited
+        length, pos = _pb_read_varint(buf, pos)
+        pos += length
+    elif wire_type == 1:  # 64-bit
+        pos += 8
+    elif wire_type == 5:  # 32-bit
+        pos += 4
+    else:
+        raise ValueError(f"Unbekannter Wire-Type {wire_type}")
+    return pos
+
+
+def _pb_parse_full_hash_detail(buf: bytes) -> int:
+    """Parst eine FullHashDetail-Message. Gibt den ThreatType (int) zurück."""
+    pos = 0
+    threat_type = 0
+    while pos < len(buf):
+        tag, pos = _pb_read_varint(buf, pos)
+        field_num = tag >> 3
+        wire_type = tag & 0x07
+        if field_num == 1 and wire_type == 0:  # threat_type
+            threat_type, pos = _pb_read_varint(buf, pos)
+        else:
+            pos = _pb_skip_field(buf, pos, wire_type)
+    return threat_type
+
+
+def _pb_parse_full_hash(buf: bytes) -> Optional[Tuple[bytes, int]]:
+    """Parst eine FullHash-Message. Gibt (full_hash, threat_type) zurück oder None."""
+    pos = 0
+    full_hash = b""
+    threat_type = 0
+    while pos < len(buf):
+        tag, pos = _pb_read_varint(buf, pos)
+        field_num = tag >> 3
+        wire_type = tag & 0x07
+        if field_num == 1 and wire_type == 2:  # full_hash: bytes
+            length, pos = _pb_read_varint(buf, pos)
+            full_hash = buf[pos : pos + length]
+            pos += length
+        elif field_num == 2 and wire_type == 2:  # full_hash_details: repeated message
+            length, pos = _pb_read_varint(buf, pos)
+            tt = _pb_parse_full_hash_detail(buf[pos : pos + length])
+            if tt > 0 and threat_type == 0:
+                threat_type = tt
+            pos += length
+        else:
+            pos = _pb_skip_field(buf, pos, wire_type)
+    if not full_hash:
+        return None
+    return full_hash, threat_type
+
+
+def _pb_parse_search_hashes_response(buf: bytes) -> List[Tuple[bytes, int]]:
+    """Parst eine SearchHashesResponse-Message. Gibt Liste von (full_hash, threat_type)."""
+    pos = 0
+    full_hashes: List[Tuple[bytes, int]] = []
+    while pos < len(buf):
+        tag, pos = _pb_read_varint(buf, pos)
+        field_num = tag >> 3
+        wire_type = tag & 0x07
+        if field_num == 1 and wire_type == 2:  # full_hashes: repeated message
+            length, pos = _pb_read_varint(buf, pos)
+            fh = _pb_parse_full_hash(buf[pos : pos + length])
+            if fh:
+                full_hashes.append(fh)
+            pos += length
+        else:
+            pos = _pb_skip_field(buf, pos, wire_type)
+    return full_hashes
+
+
 def _list_txt_files(directory: str) -> List[str]:
     """Gibt sortierte absolute Pfade aller .txt-Dateien in `directory` zurück."""
     if not os.path.isdir(directory):
@@ -4014,10 +4414,15 @@ def _normalize_domain(domain: str) -> str:
 
 
 def _valid_domain(domain: str) -> bool:
-    """Minimale Plausibilitätsprüfung für Domain-Strings."""
+    """Minimale Plausibilitätsprüfung für Domain-Strings.
+    Matrix-IDs (@user:server.com), URLs und host:port-Strings werden abgelehnt.
+    """
     if not domain:
         return False
     check = domain[2:] if domain.startswith("*.") else domain
+    # Sicherheit: Matrix-IDs beginnen mit @ — URLs/host:port enthalten :
+    if check.startswith("@") or ":" in check:
+        return False
     return bool(check) and "." in check and check not in _SKIP_DOMAINS
 
 

@@ -1,5 +1,5 @@
 # =============================================================================
-# base-config.yaml — Standardkonfiguration (v2.6.3)
+# base-config.yaml — Standardkonfiguration (v2.7.0)
 # =============================================================================
 #
 # Diese Standardwerte können nach dem Erstellen einer Instanz im Maubot-Dashboard
@@ -158,3 +158,22 @@ global_mute: true
 #
 # Generierung: python3 -c "import secrets; print(secrets.token_hex(32))"
 secret_salt: "CHANGE_ME_use_python3_secrets_token_hex_32"
+
+
+# -----------------------------------------------------------------------------
+# URL-SICHERHEITSCHECK (Google Safe Browsing v5)
+# -----------------------------------------------------------------------------
+#
+# Wenn aktiviert, werden unbekannte Domains (die weder auf der Whitelist noch
+# auf der Blacklist stehen) vor der Mod-Raum-Weiterleitung gegen die Google
+# Safe Browsing v5 API geprüft. Das Ergebnis erscheint im Mod-Raum-Alert.
+#
+# DATENSCHUTZ: Es wird nur ein 4-Byte-Hash-Präfix übertragen — Google sieht
+# niemals die tatsächliche Domain (Privacy-Preserving Hash Lookup, GSB v5).
+#
+# API-Key: https://console.cloud.google.com/apis/library/safebrowsing.googleapis.com
+# Limit (kostenlos): 10.000 Requests/Tag
+url_safety_check:
+  enabled: false
+  api_key: ""
+  timeout: 3        # HTTP-Timeout in Sekunden

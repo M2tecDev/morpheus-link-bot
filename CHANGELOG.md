@@ -3,6 +3,32 @@
 Alle wichtigen Änderungen am **morpheus-link-bot** werden hier dokumentiert.
 Das Format orientiert sich an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/) und [Semantic Versioning](https://semver.org/lang/de/).
 
+## [2.7.0] - 2026-05-11
+
+**Neues Feature: Auto-Block für .onion-Adressen (Tor Hidden Services)**
+
+- **`.onion`-Erkennung in allen Extraktions-Pfaden** — Hidden-Service-Adressen (RFC 7686) werden jetzt aus `href`-Links, vollständigen URLs (`http(s)://…`) und nackten Domain-Erwähnungen (`abc.onion`) erkannt. Bisher fiel `.onion` durch alle Filter, weil `onion` nicht in der TLD-Whitelist enthalten war.
+- **Automatische Blockierung ohne Mod-Review** — `.onion`-Treffer werden vor der Whitelist/Blacklist-/Unknown-Aufteilung erkannt und sofort redaktiert. Es gibt keinen Mod-Raum-Alert, keinen Google-Safe-Browsing-Check und keine Linkvorschau — eine Reputationsprüfung von Hidden Services aus dem Clearnet ist nicht möglich.
+- **Eigener Handler `_handle_onion()`** — Spiegelt das Verhalten von `_handle_blacklisted()`: Nachricht löschen, throttled User-Warnung (`warn_cooldown`), DomainStats-Inkrement, Verstoß zählen (Auto-Mute greift bei Wiederholungstätern).
+- **`!urlstatus <foo.onion>`** — Liefert „🧅 Tor Hidden Service — wird immer blockiert" statt „unbekannt".
+
+**Neues Feature: Google Safe Browsing v5-Integration**
+
+- **`url_safety_check`-Option (opt-in, Standard: false)** — Unbekannte Domains werden vor der Mod-Raum-Weiterleitung gegen die Google Safe Browsing v5 API geprüft. Das Ergebnis (✅ sauber / ⚠️ GEFÄHRLICH / 🟡 verdächtig / ❓ Fehler) erscheint direkt im Moderations-Alert.
+- **Privacy-Preserving Hash Lookup (v5)** — Statt die URL im Klartext an Google zu senden (v4), wird nur ein 4-Byte SHA-256-Präfix übertragen. Google sieht niemals die echte Domain.
+- **`_check_url_safety()` + `_validate_gsb_config()`** — Canonicalization, SHA-256-Hashing, Base64-Kodierung, GSB-API-Call, lokaler Full-Hash-Vergleich. Beim Start wird die GSB-Konfiguration via Test-Request validiert; ein ungültiger API-Key bricht den Plugin-Start hart ab, statt schweigend zu scheitern.
+- **Konfiguration** — Neuer Block `url_safety_check:` in `base-config.yaml` mit `enabled`, `api_key`, `timeout`.
+
+**Härtung: `!block` / `!allow` lehnen Matrix-IDs ab**
+
+- **MXID-Schutz für Moderationsbefehle** — `!block @opfer:home.tld` (sowie Varianten mit `!`, `#`, `$`) werden mit einer expliziten Fehlermeldung abgelehnt, statt den Homeserver des Nutzers als Domain in die Blacklist zu schreiben. Schützt vor versehentlicher Sperre und vor Missbrauch durch einen kompromittierten Mod-Account. Dieselbe Prüfung greift in `!allow`. Bei Mehrfacheingaben wird nur das MXID-artige Token übersprungen, gültige Domains werden weiterhin verarbeitet.
+
+**Robustheit: Klassen-weite Event-Deduplizierung**
+
+- Zusätzlicher `_global_seen_event_ids`-Cache (5 000 Einträge) als Fallback, falls Maubot den Handler nach Hot-Reload doppelt registriert. Verhindert doppelt redaktierte Nachrichten und doppelte Mod-Alerts.
+
+---
+
 ## [2.6.3] - 2026-05-07
 
 **Bugfixes**
