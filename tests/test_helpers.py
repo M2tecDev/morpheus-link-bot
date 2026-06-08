@@ -11,7 +11,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from main import (  # noqa: E402
     URLFilterBot,
     _format_age,
+    _is_matrix_to_deeplink,
     _is_onion_host,
+    _looks_like_matrix_identifier,
     _split_domain_args,
     _valid_domain,
 )
@@ -250,3 +252,129 @@ class TestExtractDomainsOnion:
         domains = URLFilterBot._extract_domains("Visit https://example.com today")
         assert "example.com" in domains
         assert not any(d.endswith(".onion") for d in domains)
+
+
+# ---------------------------------------------------------------------------
+# matrix.to-Deeplinks — auch im neuen Matrix-v12 / MSC4291 Format ohne :server
+# ---------------------------------------------------------------------------
+
+
+class TestLooksLikeMatrixIdentifier:
+    def test_classic_room_id(self):
+        assert _looks_like_matrix_identifier("!abc:example.org") is True
+
+    def test_serverless_room_id(self):
+        assert (
+            _looks_like_matrix_identifier(
+                "!Jos2YAuOgkGhsGbcJNx7CpQxneXZNcu5hJN1OrSVgwc"
+            )
+            is True
+        )
+
+    def test_classic_user_id(self):
+        assert _looks_like_matrix_identifier("@alice:example.org") is True
+
+    def test_user_id_without_server_rejected(self):
+        assert _looks_like_matrix_identifier("@alice") is False
+
+    def test_classic_room_alias(self):
+        assert _looks_like_matrix_identifier("#room:example.org") is True
+
+    def test_room_alias_without_server_rejected(self):
+        assert _looks_like_matrix_identifier("#room") is False
+
+    def test_event_id(self):
+        assert _looks_like_matrix_identifier("$abc123") is True
+
+    def test_no_sigil_rejected(self):
+        assert _looks_like_matrix_identifier("randomstring") is False
+
+    def test_empty_rejected(self):
+        assert _looks_like_matrix_identifier("") is False
+
+    def test_only_sigil_rejected(self):
+        assert _looks_like_matrix_identifier("!") is False
+
+    def test_room_id_strips_query(self):
+        assert (
+            _looks_like_matrix_identifier(
+                "!Jos2YAuOgkGhsGbcJNx7CpQxneXZNcu5hJN1OrSVgwc?via=matrix.org"
+            )
+            is True
+        )
+
+
+class TestIsMatrixToDeeplink:
+    def test_serverless_room_with_via_params(self):
+        url = (
+            "https://matrix.to/#/!Jos2YAuOgkGhsGbcJNx7CpQxneXZNcu5hJN1OrSVgwc"
+            "?via=matrix.org&via=tchncs.de&via=nope.chat"
+        )
+        assert _is_matrix_to_deeplink(url) is True
+
+    def test_serverless_room_no_via(self):
+        assert (
+            _is_matrix_to_deeplink(
+                "https://matrix.to/#/!Jos2YAuOgkGhsGbcJNx7CpQxneXZNcu5hJN1OrSVgwc"
+            )
+            is True
+        )
+
+    def test_classic_room_with_via(self):
+        assert (
+            _is_matrix_to_deeplink(
+                "https://matrix.to/#/!abc:example.org?via=matrix.org"
+            )
+            is True
+        )
+
+    def test_classic_user(self):
+        assert _is_matrix_to_deeplink("https://matrix.to/#/@alice:example.org") is True
+
+    def test_classic_alias(self):
+        assert _is_matrix_to_deeplink("https://matrix.to/#/#room:example.org") is True
+
+    def test_non_matrix_to_host_rejected(self):
+        assert _is_matrix_to_deeplink("https://example.com/#/!abc:foo.org") is False
+
+    def test_garbage_fragment_rejected(self):
+        assert _is_matrix_to_deeplink("https://matrix.to/#/randomstring") is False
+
+
+class TestExtractDomainsMatrixTo:
+    """Regression: via= server hints must NOT be extracted as separate domains."""
+
+    def test_serverless_room_id_via_params_not_extracted(self):
+        body = (
+            "https://matrix.to/#/!Jos2YAuOgkGhsGbcJNx7CpQxneXZNcu5hJN1OrSVgwc"
+            "?via=matrix.org&via=tchncs.de&via=nope.chat"
+        )
+        domains = URLFilterBot._extract_domains(body)
+        assert "matrix.org" not in domains
+        assert "tchncs.de" not in domains
+        assert "nope.chat" not in domains
+        assert "matrix.to" not in domains
+
+    def test_serverless_room_id_in_reply_quote(self):
+        body = (
+            "> Mika\n"
+            "> https://matrix.to/#/!Jos2YAuOgkGhsGbcJNx7CpQxneXZNcu5hJN1OrSVgwc"
+            "?via=matrix.org&via=tchncs.de&via=nope.chat\n"
+            "Antwort"
+        )
+        formatted = (
+            '<mx-reply><blockquote><a href="https://matrix.to/#/'
+            "!Jos2YAuOgkGhsGbcJNx7CpQxneXZNcu5hJN1OrSVgwc"
+            '?via=matrix.org&via=tchncs.de&via=nope.chat">#general</a>'
+            "</blockquote></mx-reply>Antwort"
+        )
+        domains = URLFilterBot._extract_domains(body, formatted)
+        assert "matrix.org" not in domains
+        assert "tchncs.de" not in domains
+        assert "nope.chat" not in domains
+        assert "matrix.to" not in domains
+
+    def test_normal_external_links_still_work(self):
+        body = "Schau mal https://example.com vorbei"
+        domains = URLFilterBot._extract_domains(body)
+        assert "example.com" in domains

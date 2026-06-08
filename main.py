@@ -1,5 +1,5 @@
 """
-URL-Filter-Bot — Hochleistungsedition  (v2.7.0)
+URL-Filter-Bot — Hochleistungsedition  (v2.7.1)
 ============================================
 
 Designziele
@@ -797,10 +797,18 @@ _MATRIX_TO_TEXT_LINK_RE: re.Pattern = re.compile(
 )
 
 
+_OPAQUE_ROOM_ID_RE: re.Pattern = re.compile(r"^[A-Za-z0-9._=+/\-]+$", re.ASCII)
+
+
 def _looks_like_matrix_identifier(token: str) -> bool:
     """
     Erkennt Matrix-Bezeichner robust anhand ihrer Form, ohne eine "echte"
     Domain/TLD im Homeserver-Teil vorauszusetzen.
+
+    Raum-IDs (`!`-Sigill) werden auch im neuen Matrix-v12 / MSC4291-Format
+    ohne `:server`-Suffix akzeptiert (Element/Continuwuity verwenden dieses
+    Format zusammen mit `via=`-Hints in matrix.to-Links).
+    User-IDs (`@`) und Raum-Aliase (`#`) verlangen weiterhin strikt `:server`.
     """
     token = unquote(token).strip().lstrip("/")
     if not token:
@@ -815,7 +823,18 @@ def _looks_like_matrix_identifier(token: str) -> bool:
         return len(token) > 1
     if sigil not in "@!#":
         return False
-    return ":" in token[1:] and not token.endswith(":")
+
+    rest = token[1:]
+    if not rest or token.endswith(":"):
+        return False
+
+    if ":" in rest:
+        return True
+
+    if sigil == "!":
+        return bool(_OPAQUE_ROOM_ID_RE.match(rest))
+
+    return False
 
 
 def _is_matrix_to_deeplink(url: str) -> bool:
@@ -3400,7 +3419,7 @@ class URLFilterBot(Plugin):
             return
 
         help_text = (
-            "🤖 **URL-Filter-Bot — Befehlsübersicht (v2.7.0)**\n\n"
+            "🤖 **URL-Filter-Bot — Befehlsübersicht (v2.7.1)**\n\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             "🔓 **Öffentliche Befehle**\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"

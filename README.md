@@ -1,4 +1,4 @@
-# URL-Filter-Bot für Matrix — v2.7.0
+# URL-Filter-Bot für Matrix — v2.7.1
 [![Made for Matrix](https://img.shields.io/badge/Made%20for%20Matrix-000000?logo=matrix&logoColor=white)](https://matrix.org/)
 
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
@@ -12,6 +12,8 @@
 
 Ein Maubot-Plugin, das eingehende Nachrichten in Matrix-Räumen auf URLs scannt und diese gegen konfigurierbare Blacklists und Whitelists prüft. Unbekannte Links werden automatisch zur Moderatorenüberprüfung weitergeleitet. Enthält automatischen Spam-Schutz mit optionalem Stummschalten, eine vollständig datenbankgestützte Persistenz und DSGVO-konforme Datenhaltung.
 
+> **Neu in v2.7.1:** Fix für matrix.to-Deeplinks mit `?via=…`-Parametern und neuem Matrix-v12 / MSC4291 Raum-ID-Format (ohne `:server`-Suffix) — die `via`-Server werden nicht mehr fälschlich als eigenständige externe Domains erkannt.
+>
 > **Neu in v2.7.0:** `.onion`-Adressen (Tor Hidden Services) werden automatisch blockiert, Google Safe Browsing v5 prüft unbekannte Domains (Privacy-Preserving Hash Lookup), und `!block` / `!allow` lehnen Matrix-Nutzer-/Raum-IDs ab.
 
 ---

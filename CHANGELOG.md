@@ -3,6 +3,16 @@
 Alle wichtigen Änderungen am **morpheus-link-bot** werden hier dokumentiert.
 Das Format orientiert sich an [Keep a Changelog](https://keepachangelog.com/de/1.0.0/) und [Semantic Versioning](https://semver.org/lang/de/).
 
+## [2.7.1] - 2026-06-08
+
+**Bugfix: matrix.to-Links mit `?via=…`-Parametern erzeugten Linkpreviews für die Via-Server**
+
+- **Root Cause** — Continuwuity (und Matrix v12 / MSC4291) senden Raum-IDs in matrix.to-Links ohne `:server`-Suffix, z. B. `https://matrix.to/#/!Jos2YAuOg…?via=matrix.org&via=tchncs.de&via=nope.chat`. Die bisherige Heuristik `_looks_like_matrix_identifier` verlangte für die Sigille `@!#` zwingend einen Doppelpunkt im Token und stufte solche Raum-IDs daher als „kein Matrix-Bezeichner" ein. In der Folge griff `_strip_matrix_to_deeplinks` nicht, die naked-domain-Erkennung lief über die URL hinweg und zog die hinter `via=` stehenden Servernamen als eigenständige Domains heraus — der Bot postete Linkvorschauen für `matrix.org`, `tchncs.de` und `nope.chat`.
+- **Fix in `_looks_like_matrix_identifier` ([main.py](main.py))** — `!`-Raum-IDs werden jetzt auch im serverlosen Format akzeptiert (Opaque-Identifier-Charset `[A-Za-z0-9._=+/-]+`). `@`-User-IDs und `#`-Raum-Aliase bleiben unverändert strikt mit `:server`-Suffix, da die Matrix-Spezifikation dort kein serverloses Format kennt. Alle nachgelagerten Pfade (`_is_matrix_to_deeplink`, `_strip_matrix_to_deeplinks`, `_extract_domains`, `_find_url_for_domain`) profitieren automatisch.
+- **Tests** — 21 neue Tests in [tests/test_helpers.py](tests/test_helpers.py): direkte Tests für `_looks_like_matrix_identifier` und `_is_matrix_to_deeplink` (klassisches + serverloses Format, User/Alias-Regressionen) sowie Integrationstests durch `URLFilterBot._extract_domains` mit dem konkreten Bugreport-Body (inkl. Reply-Quote mit `<mx-reply>`).
+
+---
+
 ## [2.7.0] - 2026-05-11
 
 **Neues Feature: Auto-Block für .onion-Adressen (Tor Hidden Services)**
